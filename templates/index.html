@@ -1,7 +1,17 @@
 {% extends "base.html" %}
-{% block title %}开始游戏{% endblock %}
+{% block title %}卡牌对战{% endblock %}
 {% block content %}
+<main class="start-page">
 <h1>卡牌对战</h1>
-<p>玩家选择一个角色，与简单电脑对手进行一局 3–5 分钟的回合制战斗。</p>
-<a href="{{ url_for('heroes_select') }}">开始游戏</a>
+<p class="tagline">选择角色，击败简单电脑对手，赢得这场 3–5 分钟的回合制战斗。</p>
+<a class="btn primary" href="{{ url_for('heroes_select') }}">开始游戏</a>
+<section class="rules">
+<h2>玩法简介</h2>
+<ul>
+<li>每回合 3 点能量，可在攻击、护盾、治疗之间自由组合。</li>
+<li>卡牌打完后回合结束，电脑行动一次。</li>
+<li>10 回合内未分胜负则判平局。</li>
+</ul>
+</section>
+</main>
 {% endblock %}

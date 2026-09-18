@@ -1,15 +1,31 @@
 {% extends "base.html" %}
 {% block title %}选择角色{% endblock %}
 {% block content %}
-<h1>选择角色</h1>
-<form method="post" action="{{ url_for('heroes_confirm') }}">
+<main class="heroes-page">
+<h1>选择你的角色</h1>
+<form id="hero-form" method="post" action="{{ url_for('heroes_confirm') }}">
+<div class="hero-grid">
 {% for key, hero in heroes.items() %}
-<label class="hero-card">
-<input type="radio" name="hero_key" value="{{ key }}">
-<strong>{{ hero.name }}</strong> - 生命值 {{ hero.max_hp }}
-<br>技能：{{ hero.skill_name }}
+<label class="hero-card" data-hero="{{ key }}">
+<input type="radio" name="hero_key" value="{{ key }}" required>
+<h2>{{ hero.name }}</h2>
+<p class="hp">生命值：{{ hero.max_hp }}</p>
+<p class="skill">技能：{{ hero.skill_name }}（消耗 2 能量）</p>
 </label>
 {% endfor %}
-<button type="submit">确认角色</button>
+</div>
+<button id="confirm-hero" type="submit" disabled>确认角色</button>
 </form>
+<script>
+document.querySelectorAll('input[name="hero_key"]').forEach(function (radio) {
+radio.addEventListener('change', function () {
+document.querySelectorAll('.hero-card').forEach(function (card) {
+card.classList.remove('selected');
+});
+radio.closest('.hero-card').classList.add('selected');
+document.getElementById('confirm-hero').disabled = false;
+});
+});
+</script>
+</main>
 {% endblock %}

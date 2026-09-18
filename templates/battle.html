@@ -1,14 +1,78 @@
 {% extends "base.html" %}
-{% block title %}战斗{% endblock %}
+{% block title %}战斗 - 第 {{ battle.round_number }} 回合{% endblock %}
 {% block content %}
-<h1>战斗</h1>
-<div>当前回合：第 {{ battle.round_number }} 回合</div>
-<div>电脑 生命值 {{ battle.enemy.hp }} / 护盾 {{ battle.enemy.shield }}</div>
-<div>玩家 生命值 {{ battle.player.hp }} / 护盾 {{ battle.player.shield }} / 能量 {{ battle.player.energy }}</div>
+{% set phase = battle.phase.value %}
+{% set is_player_turn = phase == "PLAYER_TURN" %}
+{% set is_enemy_turn = phase == "ENEMY_TURN" %}
+{% set is_finished = phase in ["VICTORY", "DEFEAT", "DRAW"] %}
+{% set enemy_visible_phase = phase in ["ENEMY_TURN", "PLAYER_TURN", "VICTORY", "DEFEAT", "DRAW"] %}
+<main class="battle-page">
+<section class="enemy-panel">
+<h2>{{ battle.enemy.name }}</h2>
+<p>生命值：{{ battle.enemy.hp }} / {{ battle.enemy.max_hp }}</p>
+<p>护盾：{{ battle.enemy.shield }}</p>
+{% if is_enemy_turn %}<p class="status">电脑行动中…</p>{% endif %}
+{% if is_player_turn %}<p class="status">当前行动方：玩家</p>{% endif %}
+</section>
+
+<section class="round-banner">
+<h1>第 {{ battle.round_number }} 回合</h1>
+<p>当前回合阶段：{{ phase }}</p>
+<p class="latest-log">最近日志：{{ battle.log[-1] if battle.log else "" }}</p>
+</section>
+
+<section class="player-panel">
+<h2>{{ battle.player.name }}（{{ battle.hero.name }}）</h2>
+<p>生命值：{{ battle.player.hp }} / {{ battle.player.max_hp }}</p>
+<p>护盾：{{ battle.player.shield }}</p>
+<p>能量：{{ battle.player.energy }}</p>
+<form method="post" action="{{ url_for('battle_use_skill') }}">
+<button type="submit"
+{% if not is_player_turn or battle.player.energy < 2 or battle.skill_used_this_turn %}disabled{% endif %}>
+使用技能：{{ battle.hero.skill_name }}（消耗 2 能量）
+</button>
+{% if battle.skill_used_this_turn %}<span>本回合技能已经使用过</span>{% endif %}
+</form>
+</section>
+
+<section class="hand">
 <h2>手牌</h2>
-<ul>
+<ul class="card-list">
 {% for c in battle.hand %}
-<li>{{ cards[c.key].name }} ({{ cards[c.key].cost }})</li>
+<li class="hand-card">
+<div class="card-name">{{ cards[c.key].name }}</div>
+<div class="card-cost">消耗 {{ cards[c.key].cost }}</div>
+<div class="card-effect">
+{% if cards[c.key].effect_type == "damage" %}造成 {{ cards[c.key].value }} 点伤害
+{% elif cards[c.key].effect_type == "shield" %}获得 {{ cards[c.key].value }} 点护盾
+{% elif cards[c.key].effect_type == "heal" %}恢复 {{ cards[c.key].value }} 点生命值
+{% endif %}
+</div>
+<form method="post" action="{{ url_for('battle_play_card', card_id=c.id) }}">
+<button type="submit"
+{% if not is_player_turn or battle.player.energy < cards[c.key].cost %}disabled{% endif %}>
+出牌
+</button>
+</form>
+</li>
 {% endfor %}
 </ul>
+</section>
+
+<section class="controls">
+<form method="post" action="{{ url_for('battle_end_turn') }}">
+<button type="submit" {% if not is_player_turn %}disabled{% endif %}>结束回合</button>
+</form>
+{% if is_finished %}
+<a class="btn primary" href="{{ url_for('result_view') }}">查看结果</a>
+{% endif %}
+</section>
+
+<section class="log">
+<h2>战斗日志</h2>
+<ul>
+{% for entry in battle.log %}<li>{{ entry }}</li>{% endfor %}
+</ul>
+</section>
+</main>
 {% endblock %}

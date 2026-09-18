@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}战斗结果{% endblock %}
 {% block content %}
-<h1>战斗结束</h1>
-<p>结果：{{ battle.phase.value }}</p>
+{% set phase = battle.phase.value %}
+{% set outcome_label = {"VICTORY": "胜利", "DEFEAT": "失败", "DRAW": "平局"}.get(phase, phase) %}
+<main class="result-page">
+<h1>战斗结束 - {{ outcome_label }}</h1>
+<p>使用角色：{{ battle.hero.name }}</p>
+<p>总回合数：{{ battle.round_number }}</p>
+<p>电脑最终生命值：{{ battle.enemy.hp }}</p>
+<p>玩家最终生命值：{{ battle.player.hp }}</p>
+<form method="post" action="{{ url_for('restart') }}">
+<button type="submit">再来一局</button>
+</form>
+</main>
 {% endblock %}

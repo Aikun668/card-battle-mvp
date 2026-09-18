@@ -1,0 +1,154 @@
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #1b1d29;
+  color: #f3f3f5;
+  margin: 0;
+  padding: 1rem;
+  line-height: 1.5;
+}
+
+h1, h2 {
+  margin-top: 0;
+}
+
+a {
+  color: #7cc4ff;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #3a3f55;
+  background: #2b2f42;
+  color: #f3f3f5;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #3a3f55;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  display: inline-block;
+  background: #4b6fff;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  text-decoration: none;
+}
+
+.flash {
+  list-style: none;
+  padding: 0.5rem 1rem;
+  margin: 0 0 1rem 0;
+  background: #4a3a2c;
+  border-left: 4px solid #ffa94d;
+}
+
+.start-page,
+.heroes-page,
+.battle-page,
+.result-page {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.start-page .tagline {
+  font-size: 1.1rem;
+  margin-bottom: 1.5rem;
+}
+
+.start-page .rules {
+  margin-top: 2rem;
+  background: #232634;
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.hero-card {
+  display: block;
+  padding: 1rem;
+  border: 2px solid #3a3f55;
+  border-radius: 8px;
+  background: #232634;
+  cursor: pointer;
+}
+
+.hero-card input {
+  display: none;
+}
+
+.hero-card.selected {
+  border-color: #4b6fff;
+  background: #2a304a;
+}
+
+.battle-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.enemy-panel,
+.player-panel,
+.round-banner,
+.hand,
+.log,
+.controls {
+  background: #232634;
+  padding: 1rem;
+  border-radius: 6px;
+}
+
+.round-banner .latest-log {
+  font-style: italic;
+  color: #cdd3e0;
+}
+
+.hand .card-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+}
+
+.hand-card {
+  border: 1px solid #3a3f55;
+  border-radius: 4px;
+  padding: 0.5rem;
+  background: #2a2e3f;
+  min-width: 140px;
+}
+
+.hand-card .card-name {
+  font-weight: bold;
+}
+
+.hand-card form {
+  margin-top: 0.4rem;
+}
+
+.log ul {
+  max-height: 220px;
+  overflow-y: auto;
+  padding-left: 1rem;
+}
+
+.controls {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}

@@ -42,3 +42,21 @@ def test_card_post_redirects_and_refresh_does_not_repeat_action(tmp_path):
     assert second_get.status_code == 200
     with client.session_transaction() as session:
         assert session["battle"]["enemy"]["hp"] <= enemy_hp_before
+
+
+def test_hero_page_has_a_disabled_confirm_button_before_selection(tmp_path):
+    client = make_client(tmp_path)
+    body = client.get("/heroes").get_data(as_text=True)
+    assert "确认角色" in body
+    assert "hero-card" in body
+
+
+def test_battle_page_exposes_player_state_hand_and_end_turn(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/heroes", data={"hero_key": "mage"})
+    body = client.get("/battle").get_data(as_text=True)
+    assert "生命值" in body
+    assert "护盾" in body
+    assert "能量" in body
+    assert "结束回合" in body
+    assert "战斗日志" in body
