@@ -1,12 +1,15 @@
 import random
 import uuid
 
+from game.ai import choose_enemy_card
 from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
 from game.models import ActionResult, BattlePhase, CardDefinition, Combatant, HeroDefinition
 
 HAND_LIMIT = 6
 STARTING_ENERGY = 3
 ENEMY_STARTING_HP = 28
+STARTING_HAND = 5
+ROUND_LIMIT = 10
 
 
 class BattleState:
@@ -67,8 +70,25 @@ class BattleState:
             rng=rng,
         )
         state.log.append(f"战斗开始，玩家选择角色：{hero.name}")
-        state.draw_cards(5)
+        state.draw_cards(STARTING_HAND)
+        state._draw_enemy_cards(STARTING_HAND)
         return state
+
+    def _draw_enemy_cards(self, count: int) -> int:
+        drawn = 0
+        for _ in range(count):
+            if len(self.enemy_hand) >= HAND_LIMIT:
+                break
+            if not self.enemy_draw_pile:
+                if not self.enemy_discard_pile:
+                    break
+                self.enemy_draw_pile.extend(self.enemy_discard_pile)
+                self.enemy_discard_pile.clear()
+                self.rng.shuffle(self.enemy_draw_pile)
+            key = self.enemy_draw_pile.pop()
+            self.enemy_hand.append({"id": f"enemy-{uuid.uuid4().hex[:8]}", "key": key})
+            drawn += 1
+        return drawn
 
     def _new_card_id(self) -> str:
         return f"card-{uuid.uuid4().hex[:8]}"
@@ -189,6 +209,58 @@ class BattleState:
             self.phase = BattlePhase.VICTORY
         elif self.player.hp <= 0:
             self.phase = BattlePhase.DEFEAT
+
+    def end_player_turn(self) -> ActionResult:
+        if self.is_finished():
+            return ActionResult(False, "本局已经结束，请重新开始")
+        if self.phase is not BattlePhase.PLAYER_TURN:
+            return ActionResult(False, "现在是电脑回合，请等待电脑行动")
+        self.phase = BattlePhase.ENEMY_TURN
+        self.log.append(f"第 {self.round_number} 回合结束，电脑开始行动")
+        return ActionResult(True, "")
+
+    def resolve_enemy_turn(self) -> ActionResult:
+        if self.is_finished():
+            return ActionResult(False, "本局已经结束，请重新开始")
+        if self.phase is not BattlePhase.ENEMY_TURN:
+            return ActionResult(False, "还没有进入电脑回合")
+        self.enemy.energy = STARTING_ENERGY
+        self.enemy.shield = 0
+        card_id = choose_enemy_card(self)
+        if card_id is not None:
+            self._play_enemy_card(card_id)
+            self._check_terminal()
+        if self.is_finished():
+            return ActionResult(True, "")
+        if self.round_number >= ROUND_LIMIT:
+            self.phase = BattlePhase.DRAW
+            self.log.append(f"达到 {ROUND_LIMIT} 回合上限，本局平局")
+            return ActionResult(True, "")
+        self.round_number += 1
+        self.phase = BattlePhase.PLAYER_TURN
+        self.player.energy = STARTING_ENERGY
+        self.skill_used_this_turn = False
+        self.draw_cards(1)
+        self._draw_enemy_cards(1)
+        self.log.append(f"第 {self.round_number} 回合开始")
+        return ActionResult(True, "")
+
+    def _play_enemy_card(self, card_instance_id: str) -> None:
+        for i, card in enumerate(self.enemy_hand):
+            if card["id"] == card_instance_id:
+                definition = CARDS[card["key"]]
+                self.enemy_discard_pile.append(definition.key)
+                self.enemy_hand.pop(i)
+                if definition.effect_type == "damage":
+                    self.apply_damage(self.player, definition.value)
+                    self.log.append(f"电脑使用【{definition.name}】，对你造成 {definition.value} 点伤害")
+                elif definition.effect_type == "shield":
+                    self.enemy.shield += definition.value
+                    self.log.append(f"电脑使用【{definition.name}】，获得 {definition.value} 点护盾")
+                elif definition.effect_type == "heal":
+                    self.apply_heal(self.enemy, definition.value)
+                    self.log.append(f"电脑使用【{definition.name}】，恢复 {definition.value} 点生命值")
+                return
 
     def is_finished(self) -> bool:
         return self.phase in (BattlePhase.VICTORY, BattlePhase.DEFEAT, BattlePhase.DRAW)
