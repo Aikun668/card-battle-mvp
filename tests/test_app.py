@@ -2,11 +2,13 @@ from app import create_app
 
 
 def make_client(tmp_path):
-    app = create_app({
-        "TESTING": True,
-        "SECRET_KEY": "test-secret",
-        "DATABASE": str(tmp_path / "test.sqlite3"),
-    })
+    app = create_app(
+        {
+            "TESTING": True,
+            "SECRET_KEY": "test-secret",
+            "DATABASE": str(tmp_path / "test.sqlite3"),
+        }
+    )
     return app.test_client()
 
 
@@ -60,3 +62,60 @@ def test_battle_page_exposes_player_state_hand_and_end_turn(tmp_path):
     assert "能量" in body
     assert "结束回合" in body
     assert "战斗日志" in body
+
+
+def test_routes_redirect_to_heroes_when_no_live_battle(tmp_path):
+    client = make_client(tmp_path)
+    r = client.get("/battle")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")
+    r = client.post("/battle/card/anything")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")
+    r = client.post("/battle/skill")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")
+    r = client.post("/battle/end-turn")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")
+    r = client.get("/result")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")
+
+
+def test_match_result_written_to_sqlite_exactly_once(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/heroes", data={"hero_key": "warrior"})
+    with client.session_transaction() as s:
+        s["battle"]["enemy"]["hp"] = 1
+        s["battle"]["hand"] = [{"id": "x", "key": "slash"}]
+        s.modified = True
+    client.post("/battle/card/x")  # kills enemy -> VICTORY -> writes to DB
+    client.post("/battle/card/x")  # rejected (not in hand)
+    client.post("/battle/card/x")
+    import sqlite3
+
+    db_path = tmp_path / "test.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        count = connection.execute("SELECT COUNT(*) FROM match_results").fetchone()[0]
+    assert count == 1
+
+
+def test_restart_clears_battle_and_returns_to_heroes(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/heroes", data={"hero_key": "warrior"})
+    assert client.get("/battle").status_code == 200
+    r = client.post("/restart")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")
+    with client.session_transaction() as s:
+        assert "battle" not in s
+    r = client.get("/battle")
+    assert r.status_code == 302
+
+
+def test_invalid_hero_key_redirects_to_heroes_with_flash(tmp_path):
+    client = make_client(tmp_path)
+    r = client.post("/heroes", data={"hero_key": "unknown"})
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/heroes")

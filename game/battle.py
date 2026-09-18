@@ -3,7 +3,13 @@ import uuid
 
 from game.ai import choose_enemy_card
 from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
-from game.models import ActionResult, BattlePhase, CardDefinition, Combatant, HeroDefinition
+from game.models import (
+    ActionResult,
+    BattlePhase,
+    CardDefinition,
+    Combatant,
+    HeroDefinition,
+)
 
 HAND_LIMIT = 6
 STARTING_ENERGY = 3
@@ -192,15 +198,21 @@ class BattleState:
         self.skill_used_this_turn = True
         if skill.skill_type == "shield":
             self.player.shield += skill.skill_value
-            self.log.append(f"释放技能【{skill.skill_name}】，获得 {skill.skill_value} 点护盾")
+            self.log.append(
+                f"释放技能【{skill.skill_name}】，获得 {skill.skill_value} 点护盾"
+            )
         elif skill.skill_type == "damage":
             self.apply_damage(self.enemy, skill.skill_value)
-            self.log.append(f"释放技能【{skill.skill_name}】，对电脑造成 {skill.skill_value} 点伤害")
+            self.log.append(
+                f"释放技能【{skill.skill_name}】，对电脑造成 {skill.skill_value} 点伤害"
+            )
         elif skill.skill_type == "damage_draw":
             self.apply_damage(self.enemy, skill.skill_value)
             drawn = self.draw_cards(1)
             extra = "并抽取 1 张牌" if drawn else "但手牌已满，未抽到牌"
-            self.log.append(f"释放技能【{skill.skill_name}】，对电脑造成 {skill.skill_value} 点伤害，{extra}")
+            self.log.append(
+                f"释放技能【{skill.skill_name}】，对电脑造成 {skill.skill_value} 点伤害，{extra}"
+            )
         self._check_terminal()
         return ActionResult(True, "")
 
@@ -253,13 +265,19 @@ class BattleState:
                 self.enemy_hand.pop(i)
                 if definition.effect_type == "damage":
                     self.apply_damage(self.player, definition.value)
-                    self.log.append(f"电脑使用【{definition.name}】，对你造成 {definition.value} 点伤害")
+                    self.log.append(
+                        f"电脑使用【{definition.name}】，对你造成 {definition.value} 点伤害"
+                    )
                 elif definition.effect_type == "shield":
                     self.enemy.shield += definition.value
-                    self.log.append(f"电脑使用【{definition.name}】，获得 {definition.value} 点护盾")
+                    self.log.append(
+                        f"电脑使用【{definition.name}】，获得 {definition.value} 点护盾"
+                    )
                 elif definition.effect_type == "heal":
                     self.apply_heal(self.enemy, definition.value)
-                    self.log.append(f"电脑使用【{definition.name}】，恢复 {definition.value} 点生命值")
+                    self.log.append(
+                        f"电脑使用【{definition.name}】，恢复 {definition.value} 点生命值"
+                    )
                 return
 
     def is_finished(self) -> bool:

@@ -18,7 +18,9 @@ def init_db(database_path: str) -> None:
         connection.commit()
 
 
-def save_match_result(database_path: str, hero_key: str, outcome: str, turns: int) -> None:
+def save_match_result(
+    database_path: str, hero_key: str, outcome: str, turns: int
+) -> None:
     created_at = datetime.now(timezone.utc).isoformat()
     with sqlite3.connect(database_path) as connection:
         connection.execute(

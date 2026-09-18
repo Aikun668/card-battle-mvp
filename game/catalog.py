@@ -15,8 +15,16 @@ CARDS: dict[str, CardDefinition] = {
 }
 
 FIXED_DECK_KEYS: list[str] = [
-    "slash", "slash", "slash", "slash",
-    "heavy_strike", "heavy_strike",
-    "shield", "shield", "shield",
-    "heal", "heal", "fireball",
+    "slash",
+    "slash",
+    "slash",
+    "slash",
+    "heavy_strike",
+    "heavy_strike",
+    "shield",
+    "shield",
+    "shield",
+    "heal",
+    "heal",
+    "fireball",
 ]
