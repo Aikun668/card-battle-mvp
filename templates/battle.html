@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}战斗{% endblock %}
+{% block content %}
+<h1>战斗</h1>
+<div>当前回合：第 {{ battle.round_number }} 回合</div>
+<div>电脑 生命值 {{ battle.enemy.hp }} / 护盾 {{ battle.enemy.shield }}</div>
+<div>玩家 生命值 {{ battle.player.hp }} / 护盾 {{ battle.player.shield }} / 能量 {{ battle.player.energy }}</div>
+<h2>手牌</h2>
+<ul>
+{% for c in battle.hand %}
+<li>{{ cards[c.key].name }} ({{ cards[c.key].cost }})</li>
+{% endfor %}
+</ul>
+{% endblock %}

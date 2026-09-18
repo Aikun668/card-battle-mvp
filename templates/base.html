@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}卡牌对战{% endblock %}</title>
+</head>
+<body>
+{% with messages = get_flashed_messages() %}
+{% if messages %}
+<ul class="flash">{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>
+{% endif %}
+{% endwith %}
+{% block content %}{% endblock %}
+</body>
+</html>

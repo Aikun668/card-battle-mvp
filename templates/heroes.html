@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}选择角色{% endblock %}
+{% block content %}
+<h1>选择角色</h1>
+<form method="post" action="{{ url_for('heroes_confirm') }}">
+{% for key, hero in heroes.items() %}
+<label class="hero-card">
+<input type="radio" name="hero_key" value="{{ key }}">
+<strong>{{ hero.name }}</strong> - 生命值 {{ hero.max_hp }}
+<br>技能：{{ hero.skill_name }}
+</label>
+{% endfor %}
+<button type="submit">确认角色</button>
+</form>
+{% endblock %}

@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}开始游戏{% endblock %}
+{% block content %}
+<h1>卡牌对战</h1>
+<p>玩家选择一个角色，与简单电脑对手进行一局 3–5 分钟的回合制战斗。</p>
+<a href="{{ url_for('heroes_select') }}">开始游戏</a>
+{% endblock %}
