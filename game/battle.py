@@ -597,7 +597,21 @@ def _participant_to_payload(participant: ParticipantState) -> dict:
         "draw_pile": list(participant.draw_pile),
         "discard_pile": list(participant.discard_pile),
         "skill_used_this_turn": participant.skill_used_this_turn,
+        "weapon": participant.weapon.key if participant.weapon else None,
+        "armor": participant.armor.key if participant.armor else None,
+        "weapon_used_this_turn": participant.weapon_used_this_turn,
+        "armor_used_this_turn": participant.armor_used_this_turn,
     }
+
+
+def _equipped_card_from_payload(key: object) -> CardDefinition | None:
+    """槽里只认装备牌：未知 key、普通牌、坏数据一律还原成空槽。"""
+    if not isinstance(key, str):
+        return None
+    definition = CARDS.get(key)
+    if definition is None or definition.effect_type != "equip":
+        return None
+    return definition
 
 
 def _pending_attack_to_payload(pending: PendingAttack | None) -> dict | None:
@@ -633,6 +647,11 @@ def _participant_from_payload(payload: dict) -> ParticipantState:
         draw_pile=list(payload["draw_pile"]),
         discard_pile=list(payload["discard_pile"]),
         skill_used_this_turn=payload["skill_used_this_turn"],
+        # 本次改动之前保存的对局没有装备字段，读到旧 session 不能崩。
+        weapon=_equipped_card_from_payload(payload.get("weapon")),
+        armor=_equipped_card_from_payload(payload.get("armor")),
+        weapon_used_this_turn=bool(payload.get("weapon_used_this_turn", False)),
+        armor_used_this_turn=bool(payload.get("armor_used_this_turn", False)),
     )
 
 

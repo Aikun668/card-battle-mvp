@@ -9,18 +9,31 @@ def test_catalog_has_the_three_specified_heroes():
 
 
 def test_fixed_deck_includes_one_response_card_in_addition_to_the_mvp_deck():
-    assert len(FIXED_DECK_KEYS) == 13
+    assert len(FIXED_DECK_KEYS) == 15
     assert FIXED_DECK_KEYS.count("slash") == 4
     assert FIXED_DECK_KEYS.count("heavy_strike") == 2
     assert FIXED_DECK_KEYS.count("shield") == 3
     assert FIXED_DECK_KEYS.count("heal") == 2
     assert FIXED_DECK_KEYS.count("fireball") == 1
     assert FIXED_DECK_KEYS.count("dodge") == 1
+    assert FIXED_DECK_KEYS.count("longsword") == 1
+    assert FIXED_DECK_KEYS.count("iron_armor") == 1
     assert {card.key for card in CARDS.values()} == set(FIXED_DECK_KEYS)
 
 
+def test_equipment_cards_cost_one_energy_and_carry_their_bonus_value():
+    assert CARDS["longsword"].name == "长剑"
+    assert CARDS["longsword"].cost == 1
+    assert CARDS["longsword"].effect_type == "equip"
+    assert CARDS["longsword"].value == 2
+    assert CARDS["iron_armor"].name == "铁甲"
+    assert CARDS["iron_armor"].cost == 1
+    assert CARDS["iron_armor"].effect_type == "equip"
+    assert CARDS["iron_armor"].value == 2
+
+
 def test_each_card_matches_mvp_cost_and_effect_values():
-    assert len(CARDS) == 6
+    assert len(CARDS) == 8
     assert CARDS["slash"].cost == 1 and CARDS["slash"].value == 6
     assert CARDS["slash"].effect_type == "damage"
     assert CARDS["heavy_strike"].cost == 2 and CARDS["heavy_strike"].value == 10

@@ -67,6 +67,11 @@ class ParticipantState:
     draw_pile: list[str]
     discard_pile: list[str]
     skill_used_this_turn: bool = False
+    # 装备槽：打出的装备牌留在这里，不进弃牌堆，跨回合保留。
+    weapon: CardDefinition | None = None
+    armor: CardDefinition | None = None
+    weapon_used_this_turn: bool = False
+    armor_used_this_turn: bool = False
 
 
 @dataclass(frozen=True)

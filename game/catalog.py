@@ -16,6 +16,9 @@ CARDS: dict[str, CardDefinition] = {
     "heal": CardDefinition("heal", "治疗", 2, "heal", 6),
     "fireball": CardDefinition("fireball", "火球", 3, "damage", 14),
     "dodge": CardDefinition("dodge", "闪避", 1, "dodge", 0),
+    # 装备：打出去之后留在槽里，不进弃牌堆。value 是加成 / 减伤点数。
+    "longsword": CardDefinition("longsword", "长剑", 1, "equip", 2),
+    "iron_armor": CardDefinition("iron_armor", "铁甲", 1, "equip", 2),
 }
 
 # 公开牌表的键：AI 的最坏情况估算只能从这里取牌，不能读对手手里有什么。
@@ -35,4 +38,6 @@ FIXED_DECK_KEYS: list[str] = [
     "heal",
     "fireball",
     "dodge",
+    "longsword",
+    "iron_armor",
 ]

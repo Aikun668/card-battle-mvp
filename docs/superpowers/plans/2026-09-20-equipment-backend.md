@@ -131,7 +131,12 @@ git commit -m "feat: add equipment cards and gear slots to the participant model
 
 **验收记录（Task 1）**
 
-（实施后填写）
+- 实际改动文件：`game/catalog.py`、`game/models.py`、`game/battle.py`、`tests/test_catalog.py`、`tests/test_session_state.py`。计划里列的五个文件全部用上，没有额外扩散。
+- 实现要点：`CARDS` 增 `longsword`（长剑）/ `iron_armor`（铁甲），都是 1 费 `effect_type="equip"`、`value=2`；`FIXED_DECK_KEYS` 各追加 1 张，**13 → 15 张**。`ParticipantState` 加 `weapon` / `armor`（`CardDefinition | None`）与 `weapon_used_this_turn` / `armor_used_this_turn`——放在参与者而不是 `Combatant` 上，因为装备是牌的第四个去处，和手牌区、抽牌堆、弃牌堆同类。序列化侧新增 `_equipped_card_from_payload()`：槽里**只认装备牌**，未知 key（`excalibur`）、普通牌（`slash`）、非字符串一律还原成空槽，坏存档不会炸掉整局。旧扁平存档走 `_migrate_legacy_participants()`，不传装备字段即默认空槽，无需改动。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **174 passed**（Task 6 结束时是 170）。新增 6 个测试：`tests/test_catalog.py` 3 个（牌库 15 张且两种装备各 1 张、装备牌的文案与数值、`len(CARDS) == 8`），`tests/test_session_state.py` 3 个（装备存档往返、旧 payload 缺装备字段读出空槽、槽里塞进非装备 key 读出空槽）。RED→GREEN 走完：实现前 6 个新测试全红，实现后全绿。
+- **证伪了一个预设风险**：计划里写"牌库 +2 张会改变所有固定种子对局的洗牌轨迹，依赖整局轨迹的用例可能漂移，要逐个重新校准"。实测**没有任何一个测试因扩容而失败**——现有用例断言的都是不变量和相对性质（能量增减、牌区守恒），没有一条钉死具体牌序。这条风险从"需要逐个校准"降级为"不需要处理"。
+- **本任务结束时的中间状态（Task 2 才修）**：装备牌现在可以被双方抽到、也可以被打出去，但 `play_card_for()` 还没有装备分支——它会走通用路径**进入弃牌堆**，而 `_apply_card_effect()` 对 `equip` 类型不做任何事。也就是说此刻打出一张装备牌 = 花 1 点能量、牌进弃牌堆、什么都不发生。电脑也一样（`ENEMY_UNUSABLE_EFFECTS` 仍然只排除闪避，AI 会把装备牌当普通候选打掉）。**这是 TDD 分步的正常中间态，不是可交付状态**；Task 2 补齐结算、Task 3 才让 AI 学会正确估值。
+- 结构说明：`EQUIP_SLOTS`（装备 key → 槽位名的映射）曾在实现中加进 `catalog.py`，但它到 Task 2 才有第一个人使用，属于死代码，已删除；Task 2 实现装备分支时再加。
 
 ### Task 2: 装备结算规则、长剑加成与铁甲减伤
 

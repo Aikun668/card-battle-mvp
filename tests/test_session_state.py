@@ -1,7 +1,7 @@
 import random
 
 from game.battle import BattleState
-from game.catalog import HEROES
+from game.catalog import CARDS, HEROES
 from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 from game.session_state import clear_battle, load_battle, save_battle
 
@@ -126,6 +126,53 @@ def test_old_pending_attack_payload_still_reads_as_the_enemy_attacking_the_playe
     assert restored.pending_attack.attacker is Side.ENEMY
     assert restored.pending_attack.defender is Side.PLAYER
     assert restored.pending_attack.damage == 10
+
+
+def test_saved_battle_round_trips_equipped_gear():
+    battle = BattleState.create("warrior", random.Random(9), starting_side=Side.PLAYER)
+    player = battle.participant(Side.PLAYER)
+    player.weapon = CARDS["longsword"]
+    player.armor = CARDS["iron_armor"]
+    player.weapon_used_this_turn = True
+
+    restored = BattleState.from_dict(battle.to_dict())
+
+    assert restored.participant(Side.PLAYER).weapon.key == "longsword"
+    assert restored.participant(Side.PLAYER).armor.key == "iron_armor"
+    assert restored.participant(Side.PLAYER).weapon_used_this_turn is True
+    assert restored.participant(Side.PLAYER).armor_used_this_turn is False
+    assert restored.participant(Side.ENEMY).weapon is None
+    assert restored.participant(Side.ENEMY).armor is None
+
+
+def test_old_payload_without_gear_keys_reads_back_unequipped():
+    payload = BattleState.create("warrior", random.Random(9)).to_dict()
+    for side in ("player", "enemy"):
+        for key in (
+            "weapon",
+            "armor",
+            "weapon_used_this_turn",
+            "armor_used_this_turn",
+        ):
+            payload["participants"][side].pop(key, None)
+
+    restored = BattleState.from_dict(payload)
+
+    assert restored.participant(Side.PLAYER).weapon is None
+    assert restored.participant(Side.PLAYER).armor is None
+    assert restored.participant(Side.PLAYER).weapon_used_this_turn is False
+
+
+def test_a_payload_naming_a_card_that_cannot_be_equipped_reads_back_unequipped():
+    # 坏存档不该炸掉整局：槽里只认装备牌。
+    payload = BattleState.create("warrior", random.Random(9)).to_dict()
+    payload["participants"]["player"]["weapon"] = "slash"
+    payload["participants"]["player"]["armor"] = "excalibur"
+
+    restored = BattleState.from_dict(payload)
+
+    assert restored.participant(Side.PLAYER).weapon is None
+    assert restored.participant(Side.PLAYER).armor is None
 
 
 def test_load_battle_without_a_saved_game_returns_none():
