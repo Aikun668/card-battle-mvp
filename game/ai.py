@@ -1,7 +1,8 @@
+import random
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from game.catalog import CARDS
+from game.catalog import CARDS, STARTING_ENERGY
 from game.models import AIDifficulty, CardDefinition
 
 DAMAGE_KEYS = {"slash", "heavy_strike", "fireball"}
@@ -18,6 +19,15 @@ PASS_SCORE = 0.5
 SHIELD_SCALE = 12.0
 # 平方增长：失血越多，治疗与护盾的边际价值上升越快，濒死时自然转向自保。
 RISK_WEIGHT = 6.0
+# 困难模式发现玩家下回合能击杀自己时，对非防御行动的扣分。
+DANGER_PENALTY = 100.0
+
+DEFENSIVE_EFFECTS = frozenset({"shield", "heal"})
+
+DIFFICULTY_SELECTION: dict[AIDifficulty, tuple[float, ...]] = {
+    AIDifficulty.EASY: (0.60, 0.25, 0.15),
+    AIDifficulty.MEDIUM: (0.88, 0.12),
+}
 
 
 @dataclass(frozen=True)
@@ -70,9 +80,7 @@ def score_pass() -> float:
     return PASS_SCORE
 
 
-def score_enemy_action(
-    state, candidate: ActionCandidate, difficulty: AIDifficulty
-) -> float:
+def _base_score(state, candidate: ActionCandidate) -> float:
     if candidate.kind == "pass":
         return score_pass()
     definition = CARDS[candidate.card_key]
@@ -85,12 +93,73 @@ def score_enemy_action(
     return 0.0
 
 
+def estimate_player_threat(state) -> int:
+    """玩家下回合能量允许打出的最高单张伤害。"""
+    values = [
+        CARDS[card["key"]].value
+        for card in state.hand
+        if CARDS[card["key"]].effect_type == "damage"
+        and CARDS[card["key"]].cost <= STARTING_ENERGY
+    ]
+    return max(values, default=0)
+
+
+def _survivable_hp_after(state, candidate: ActionCandidate) -> int:
+    hp = state.enemy.hp
+    shield = state.enemy.shield
+    if candidate.kind == "card":
+        definition = CARDS[candidate.card_key]
+        if definition.effect_type == "shield":
+            shield += definition.value
+        elif definition.effect_type == "heal":
+            hp = min(state.enemy.max_hp, hp + definition.value)
+    return hp + shield
+
+
+def hard_lookahead_adjustment(state, candidate: ActionCandidate) -> float:
+    """只做一步估算：玩家下回合是否可能击杀自己。不执行动作、不递归模拟。"""
+    threat = estimate_player_threat(state)
+    if threat <= 0:
+        return 0.0
+    if _survivable_hp_after(state, candidate) > threat:
+        return 0.0
+    if (
+        candidate.kind == "card"
+        and CARDS[candidate.card_key].effect_type in DEFENSIVE_EFFECTS
+    ):
+        return 0.0
+    return -DANGER_PENALTY
+
+
+def score_enemy_action(
+    state, candidate: ActionCandidate, difficulty: AIDifficulty
+) -> float:
+    score = _base_score(state, candidate)
+    if difficulty is AIDifficulty.HARD:
+        score += hard_lookahead_adjustment(state, candidate)
+    return score
+
+
 def rank_enemy_actions(state, difficulty: AIDifficulty) -> list[ActionCandidate]:
     scored = [
         replace(candidate, score=score_enemy_action(state, candidate, difficulty))
         for candidate in get_available_enemy_actions(state)
     ]
     return sorted(scored, key=lambda candidate: candidate.score, reverse=True)
+
+
+def select_enemy_action(
+    state, difficulty: AIDifficulty, rng: random.Random
+) -> ActionCandidate:
+    ranked = rank_enemy_actions(state, difficulty)
+    weights = DIFFICULTY_SELECTION.get(difficulty)
+    if weights is None:
+        return ranked[0]
+    # 零收益动作不参与抽取：简单难度可以选得差，但不该白白浪费手牌。
+    candidates = [candidate for candidate in ranked if candidate.score > 0][
+        : len(weights)
+    ]
+    return rng.choices(candidates, weights=weights[: len(candidates)], k=1)[0]
 
 
 def _card_for_key(card_instance: dict) -> CardDefinition:

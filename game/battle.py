@@ -2,7 +2,7 @@ import random
 import uuid
 
 from game.ai import choose_enemy_card
-from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
+from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES, STARTING_ENERGY
 from game.models import (
     ActionResult,
     BattlePhase,
@@ -12,7 +12,6 @@ from game.models import (
 )
 
 HAND_LIMIT = 6
-STARTING_ENERGY = 3
 ENEMY_STARTING_HP = 28
 STARTING_HAND = 5
 ROUND_LIMIT = 10

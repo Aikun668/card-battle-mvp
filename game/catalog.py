@@ -1,5 +1,7 @@
 from game.models import CardDefinition, HeroDefinition
 
+STARTING_ENERGY = 3
+
 HEROES: dict[str, HeroDefinition] = {
     "warrior": HeroDefinition("warrior", "战士", 32, "守护", "shield", 8),
     "mage": HeroDefinition("mage", "法师", 24, "火球术", "damage", 10),
