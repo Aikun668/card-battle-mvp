@@ -13,6 +13,12 @@ class BattlePhase(str, Enum):
     DRAW = "DRAW"
 
 
+class AIDifficulty(str, Enum):
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
+
+
 @dataclass(frozen=True)
 class CardDefinition:
     key: str

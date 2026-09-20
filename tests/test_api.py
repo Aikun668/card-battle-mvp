@@ -86,9 +86,7 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
         session["battle"]["hand"] = [
             card for card in session["battle"]["hand"] if card["key"] != "dodge"
         ]
-        session["battle"]["enemy_hand"] = [
-            {"id": "enemy-shield", "key": "shield"}
-        ]
+        session["battle"]["enemy_hand"] = [{"id": "enemy-shield", "key": "shield"}]
         session.modified = True
 
     end_turn_response = client.post("/api/game/actions/end-turn")
@@ -142,9 +140,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
     with client.session_transaction() as session:
         session["battle"]["player"]["energy"] = 2
         session["battle"]["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        session["battle"]["enemy_hand"] = [
-            {"id": "enemy-heavy", "key": "heavy_strike"}
-        ]
+        session["battle"]["enemy_hand"] = [{"id": "enemy-heavy", "key": "heavy_strike"}]
         session.modified = True
 
     end_turn = client.post("/api/game/actions/end-turn")
@@ -185,9 +181,7 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
         session["battle"]["player"]["energy"] = 1
         session["battle"]["player"]["shield"] = 4
         session["battle"]["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        session["battle"]["enemy_hand"] = [
-            {"id": "enemy-heavy", "key": "heavy_strike"}
-        ]
+        session["battle"]["enemy_hand"] = [{"id": "enemy-heavy", "key": "heavy_strike"}]
         session.modified = True
 
     client.post("/api/game/actions/end-turn")

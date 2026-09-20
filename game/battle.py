@@ -274,8 +274,7 @@ class BattleState:
 
     def _has_available_dodge(self) -> bool:
         return (
-            self._find_dodge_index() != -1
-            and self.player.energy >= CARDS["dodge"].cost
+            self._find_dodge_index() != -1 and self.player.energy >= CARDS["dodge"].cost
         )
 
     def can_dodge(self) -> bool:
@@ -382,7 +381,9 @@ class BattleState:
             "phase": self.phase.value,
             "log": list(self.log),
             "skill_used_this_turn": self.skill_used_this_turn,
-            "pending_attack": dict(self.pending_attack) if self.pending_attack else None,
+            "pending_attack": dict(self.pending_attack)
+            if self.pending_attack
+            else None,
         }
 
     @classmethod

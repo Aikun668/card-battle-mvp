@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Literal
+
 from game.catalog import CARDS
 from game.models import CardDefinition
 
@@ -5,6 +8,28 @@ DAMAGE_KEYS = {"slash", "heavy_strike", "fireball"}
 LOW_PLAYER_HP = 10
 LOW_ENEMY_HP = 8
 MID_ENEMY_HP = 16
+
+# 电脑没有英雄技能，也无法主动打出只能在响应时机使用的牌。
+ENEMY_UNUSABLE_EFFECTS = frozenset({"dodge"})
+
+
+@dataclass(frozen=True)
+class ActionCandidate:
+    kind: Literal["card", "skill", "pass"]
+    card_id: str | None = None
+    card_key: str | None = None
+    score: float = 0.0
+
+
+def get_available_enemy_actions(state) -> list[ActionCandidate]:
+    candidates = [
+        ActionCandidate(kind="card", card_id=card["id"], card_key=card["key"])
+        for card in state.enemy_hand
+        if CARDS[card["key"]].effect_type not in ENEMY_UNUSABLE_EFFECTS
+        and CARDS[card["key"]].cost <= state.enemy.energy
+    ]
+    candidates.append(ActionCandidate(kind="pass"))
+    return candidates
 
 
 def _card_for_key(card_instance: dict) -> CardDefinition:

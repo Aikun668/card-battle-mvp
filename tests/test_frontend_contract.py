@@ -52,8 +52,13 @@ def test_p2_card_name_sits_below_artwork_edge():
 def test_p2_hand_interaction_feedback_contract_is_declared():
     styles = (PROJECT_ROOT / "static" / "game.css").read_text(encoding="utf-8")
 
-    assert '.battle-card[data-availability="ready"]:is(:hover, :focus-visible)' in styles
-    assert '.battle-card[data-availability="ready"]:is(:hover, :focus-visible) .card-face::after' in styles
+    assert (
+        '.battle-card[data-availability="ready"]:is(:hover, :focus-visible)' in styles
+    )
+    assert (
+        '.battle-card[data-availability="ready"]:is(:hover, :focus-visible) .card-face::after'
+        in styles
+    )
     assert '.battle-card[data-availability="energy"] {' in styles
     assert '.battle-card[data-availability="blocked"]:disabled' in styles
 
@@ -63,7 +68,10 @@ def test_hand_fan_layout_is_calculated_from_card_count():
     styles = (PROJECT_ROOT / "static" / "game.css").read_text(encoding="utf-8")
 
     assert "const handCenter = (hand.length - 1) / 2;" in script
-    assert "const normalizedOffset = handCenter ? (index - handCenter) / handCenter : 0;" in script
+    assert (
+        "const normalizedOffset = handCenter ? (index - handCenter) / handCenter : 0;"
+        in script
+    )
     assert 'button.style.setProperty("--hand-rotate"' in script
     assert 'button.style.setProperty("--hand-offset-y"' in script
     assert "--hand-rotate" in styles
@@ -75,7 +83,10 @@ def test_energy_insufficient_card_shows_toast_without_playing_card():
     styles = (PROJECT_ROOT / "static" / "game.css").read_text(encoding="utf-8")
 
     assert "function renderHand(hand, canPlay, energy, isPlayerTurn)" in script
-    assert "button.disabled = isResponsePhase ? !canUseAsResponse : !isPlayerTurn;" in script
+    assert (
+        "button.disabled = isResponsePhase ? !canUseAsResponse : !isPlayerTurn;"
+        in script
+    )
     assert 'button.setAttribute("aria-disabled"' not in script
     assert "if (unavailableByEnergy) {" in script
     assert "showToast(`能量不足：需要 ${card.cost} 点，当前 ${energy} 点。`);" in script

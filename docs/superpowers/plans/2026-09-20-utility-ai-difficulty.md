@@ -10,6 +10,18 @@
 
 **Spec:** `docs/队友宏观计划/游戏玩法路线优先级.md`
 
+## Decisions (2026-09-20)
+
+实施前确认的六项决策，覆盖原计划中未明确或存在冲突的地方：
+
+1. **电脑保持连续行动。** 玩家每回合有 3 点能量、可连出多张牌，电脑同样如此。这是刻意的平衡改动，不是纯重构；`test_end_turn_runs_one_enemy_action_then_returns_to_player` 必须改名为多动作语义并重写断言。
+2. **旧的阈值测试重写。** `tests/test_ai.py` 中编码 if/elif 行为的测试不再有效。保留意图仍成立的三项（低血治疗、玩家低血时击杀、低血无治疗时转防御），删除"默认打最高面板伤害"（能量效率计入评分后该前提不成立），其余由新评分测试替代。
+3. **难度存进 `BattleState`。** 新增 `ai_difficulty` 字段并随 `to_dict()` / `from_dict()` 序列化进 session，否则刷新即丢失。Task 5 的 Files 清单因此包含 `game/battle.py`、`game/session_state.py` 和 `tests/test_session_state.py`。
+4. **简单难度只改变选择随机性，三档共用同一套评分函数。** 路线图表格中"击杀/能量效率/伤害溢出 = 弱化"的写法不再采用：维护两套评分会产生双倍代码路径和 bug 面，而"从高分候选中选得差"已经足以制造难度差异。路线图表格以本节为准。
+5. **电脑闪避不在本轮实现。** 电脑响应玩家攻击需要全新的反向响应流程（玩家出牌 → 电脑响应窗口），原计划仅在 Task 4 Step 4 用一句话带过且没有任何测试。本轮只把 `select_enemy_action()` 写成可直接复用的纯函数，为将来接入留好入口，不实现反向响应。
+6. **基线提交。** 闪避响应机制、JSON API 与 JS 前端此前均未提交。实施本计划前先以 `13f075b` 提交这批工作作为安全基线。
+7. **电脑技能候选本轮不实现。** 电脑是通用 `Combatant`（名为"电脑"），没有 `HeroDefinition`，也没有任何技能结算路径。Task 1 示例测试中"候选必须包含 skill"一项无法在不凭空发明敌方技能（并牵动平衡）的前提下满足，因此本轮候选只有 `card` 与 `pass`；`ActionCandidate.kind` 保留 `"skill"` 取值，等电脑拥有英雄后再接入。同理，电脑手牌中的闪避牌不会成为候选（`ENEMY_UNUSABLE_EFFECTS`）。
+
 ## Global Constraints
 
 - 不再用“生命值低于固定阈值就必定治疗/护盾”的 `if / elif` 决策树作为 AI 主流程。
@@ -216,6 +228,8 @@ Expected: `select_enemy_action` 不存在而失败。
 
 简单模式只从前 3 个正分候选中按固定权重抽取；中等模式在前 2 个正分候选中高概率选择第一名；困难模式直接选择第一名。权重必须写成集中配置，不散落在各评分函数中。
 
+按 Decisions 第 4 条，难度只体现在选择概率与困难模式的一步前瞻上；三档使用完全相同的评分函数，不实现"弱化版评分"。
+
 ```python
 DIFFICULTY_SELECTION = {
     AIDifficulty.EASY: (0.60, 0.25, 0.15),
@@ -269,6 +283,8 @@ def test_enemy_re_ranks_actions_after_each_play():
 
 测试必须通过改变第一张牌后的生命、能量或护盾来验证第二次选择重新读取新状态，而不是断言一份预生成动作列表。
 
+同时处理旧测试（见 Decisions 第 1、2 条）：`test_end_turn_runs_one_enemy_action_then_returns_to_player` 改名为 `test_end_turn_runs_enemy_actions_until_pass` 并重写为多动作语义；`tests/test_ai.py` 中被删除的 `choose_enemy_card` 相关断言一并迁移到新入口。
+
 - [ ] **Step 2: 运行回合测试，确认当前只选择一次牌**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
@@ -279,9 +295,9 @@ Expected: 电脑当前回合只执行一次动作，重新评分测试失败。
 
 `resolve_enemy_turn()` 不再调用旧 `choose_enemy_card()`。每轮循环调用 `select_enemy_action()`，由 `BattleState` 执行所选动作，再检查终局、响应状态与能量。仅保留 `HAND_LIMIT + 1` 的内部防死循环上限；它不是游戏行动限制。
 
-- [ ] **Step 4: 在响应点复用评分选择**
+- [ ] **Step 4: 保持响应可复用（本轮不实现电脑闪避）**
 
-电脑拥有可用闪避时，生成响应候选并按当前难度选择“闪避”或“放弃”。简单 AI 可以更常放弃，中等和困难会更看重将被抵消的实际伤害；每次攻击最多响应一次。
+见 Decisions 第 5 条：电脑响应玩家攻击需要全新的反向响应流程，本轮不实现。此处只要求 `select_enemy_action()` 保持为"只读状态、返回候选"的纯函数，不使用 `self` 之外的隐式状态、不直接结算，以便将来接入电脑响应时无须改动评分与选择逻辑。验证方式：确认 `select_enemy_action()` 不修改传入的 `state`（比较调用前后的 `to_dict()`）。
 
 - [ ] **Step 5: 运行 AI 与战斗回归**
 
@@ -299,6 +315,8 @@ git commit -m "refactor: drive enemy turns with utility AI"
 ### Task 5: 暴露难度选择、更新文档并验收
 
 **Files:**
+- Modify: `game/battle.py`（新增 `ai_difficulty` 字段与序列化，见 Decisions 第 3 条）
+- Modify: `game/session_state.py`
 - Modify: `game/public_state.py`
 - Modify: `api_routes.py`
 - Modify: `static/game.js`
@@ -309,6 +327,7 @@ git commit -m "refactor: drive enemy turns with utility AI"
 - Modify: `README.md`
 - Test: `tests/test_api.py`
 - Test: `tests/test_acceptance_scenarios.py`
+- Test: `tests/test_session_state.py`
 
 **Interfaces:**
 - Consumes: `AIDifficulty` 和 `BattleState` 的已选难度。

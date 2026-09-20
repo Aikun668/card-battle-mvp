@@ -1,11 +1,49 @@
 import random
 
-from game.ai import choose_enemy_card
+from game.ai import choose_enemy_card, get_available_enemy_actions
 from game.battle import BattleState
 
 
 def make_battle():
     return BattleState.create("warrior", random.Random(3))
+
+
+def test_available_enemy_actions_include_affordable_cards_and_pass():
+    battle = make_battle()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    actions = get_available_enemy_actions(battle)
+    assert {action.kind for action in actions} == {"card", "pass"}
+    assert any(action.card_id == "enemy-slash" for action in actions)
+
+
+def test_unaffordable_cards_are_not_candidates():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-fireball", "key": "fireball"}]
+    actions = get_available_enemy_actions(battle)
+    assert all(action.kind != "card" for action in actions)
+
+
+def test_dodge_is_never_an_enemy_candidate():
+    battle = make_battle()
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    actions = get_available_enemy_actions(battle)
+    assert all(action.kind != "card" for action in actions)
+
+
+def test_pass_is_available_even_with_an_empty_hand():
+    battle = make_battle()
+    battle.enemy_hand = []
+    actions = get_available_enemy_actions(battle)
+    assert [action.kind for action in actions] == ["pass"]
+
+
+def test_candidate_generation_does_not_mutate_the_battle():
+    battle = make_battle()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    before = battle.to_dict()
+    get_available_enemy_actions(battle)
+    assert battle.to_dict() == before
 
 
 def test_ai_heals_when_its_health_is_at_or_below_eight():
