@@ -304,7 +304,7 @@ git commit -m "feat: give both sides equal cards skills and pass actions"
 - Consumes: Task 3 的 `play_card_for()` 和 AI 候选模型。
 - Produces: `PendingAttack(attacker: Side, defender: Side, card_key: str, card_name: str, damage: int)`、`respond_for(side, action)`、`choose_enemy_response(observation, rng)`。
 
-- [x] **Step 1: 写双方均可闪避的失败测试**
+- [ ] **Step 1: 写双方均可闪避的失败测试**
 
 ```python
 def test_enemy_can_dodge_a_player_attack_with_retained_energy():
@@ -321,27 +321,27 @@ def test_enemy_can_dodge_a_player_attack_with_retained_energy():
 
 再覆盖：玩家闪避电脑攻击、任意一击只响应一次、无能量时不能闪避、放弃后护盾优先吸收伤害、电脑闪避后玩家仍可继续自己的行动回合。
 
-- [x] **Step 2: 运行响应测试，确认当前只会为玩家创建 `RESPONSE`**
+- [ ] **Step 2: 运行响应测试，确认当前只会为玩家创建 `RESPONSE`**
 
 Run: `pytest tests/test_battle.py tests/test_ai.py -q`
 
 Expected: 电脑闪避测试失败，玩家攻击立即结算。
 
-- [x] **Step 3: 以攻击方 / 防御方建立待响应事件**
+- [ ] **Step 3: 以攻击方 / 防御方建立待响应事件**
 
 攻击牌从攻击方手牌移到弃牌区、扣除能量后，创建 `PendingAttack`。若防御方有闪避和足够能量：防御方为玩家时进入现有 UI 等待；防御方为电脑时调用 AI 响应选择。若没有可用闪避，立即按护盾优先规则结算。
 
-- [x] **Step 4: 让 AI 对“闪避 / 放弃”评分**
+- [ ] **Step 4: 让 AI 对“闪避 / 放弃”评分**
 
 电脑响应候选只包含 `dodge` 和 `pass`。闪避分数基于本次可抵消的实际生命伤害与剩余能量价值；简单难度允许偶尔放弃，中等/困难在高实际伤害时优先闪避。不得为电脑自动免费闪避。
 
-- [x] **Step 5: 运行响应回归测试**
+- [ ] **Step 5: 运行响应回归测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 两边拥有相同的闪避资格、费用和弃牌去向；没有嵌套响应或重复扣费。
 
-- [x] **Step 6: 提交通用响应改动**
+- [ ] **Step 6: 提交通用响应改动**
 
 ```bash
 git add game/models.py game/battle.py game/ai.py tests/test_ai.py tests/test_battle.py
@@ -360,7 +360,7 @@ git commit -m "feat: make dodge responses symmetric"
 - Consumes: 双方参与者状态和公开行动日志。
 - Produces: `AIObservation`、`BattleState.enemy_observation()` 和只接受 `AIObservation` 的 `rank_enemy_actions()` / `select_enemy_action()`。
 
-- [x] **Step 1: 写 AI 不读取玩家私有手牌的失败测试**
+- [ ] **Step 1: 写 AI 不读取玩家私有手牌的失败测试**
 
 ```python
 def test_hard_ai_rank_is_unchanged_when_only_hidden_player_hand_changes():
@@ -375,13 +375,13 @@ def test_hard_ai_rank_is_unchanged_when_only_hidden_player_hand_changes():
 
 同时测试 AI 能读取自己的手牌、双方公开生命/护盾/能量/英雄、固定牌表与公开弃牌记录。
 
-- [x] **Step 2: 运行测试，确认当前困难模式遍历 `state.hand`**
+- [ ] **Step 2: 运行测试，确认当前困难模式遍历 `state.hand`**
 
 Run: `pytest tests/test_ai.py -q`
 
 Expected: 隐藏手牌改变时，当前 `estimate_player_threat()` 的排序发生变化。
 
-- [x] **Step 3: 定义受限观察视图**
+- [ ] **Step 3: 定义受限观察视图**
 
 ```python
 @dataclass(frozen=True)
@@ -395,17 +395,17 @@ class AIObservation:
 
 `PublicParticipantState` 只包含英雄 key、生命、护盾、能量、技能是否已使用；绝不能包含对方手牌、对方抽牌堆或其顺序。
 
-- [x] **Step 4: 用公开威胁估计替代窥视手牌**
+- [ ] **Step 4: 用公开威胁估计替代窥视手牌**
 
 困难模式的一步前瞻只根据公开英雄技能、玩家当前公开能量、固定牌表和公开弃牌记录估算“潜在最大威胁”；不能读取玩家当前拥有哪一张。所有 AI 评分与选择函数改为只接收 `AIObservation`。
 
-- [x] **Step 5: 运行信息边界测试**
+- [ ] **Step 5: 运行信息边界测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 私有玩家手牌变化不影响 AI 排名；公开生命、能量或已打出牌变化会影响 AI 排名。
 
-- [x] **Step 6: 提交信息边界改动**
+- [ ] **Step 6: 提交信息边界改动**
 
 ```bash
 git add game/ai.py game/battle.py tests/test_ai.py tests/test_battle.py
@@ -433,7 +433,7 @@ git commit -m "fix: prevent AI from reading hidden player cards"
 - Consumes: Tasks 1–5 的双参与者状态、通用响应和 `AIObservation`。
 - Produces: 不泄露电脑手牌的公开 API；页面上双方对称的英雄/资源/技能信息；唯一的对等规则文档。
 
-- [x] **Step 1: 写公开状态与隐私边界测试**
+- [ ] **Step 1: 写公开状态与隐私边界测试**
 
 ```python
 def test_public_state_shows_both_public_resources_but_not_enemy_hand(client):
@@ -447,25 +447,25 @@ def test_public_state_shows_both_public_resources_but_not_enemy_hand(client):
 
 再覆盖：电脑先手时 `POST /api/game` 返回可保存状态；刷新后双方英雄、能量、技能次数和 pending response 不丢失；旧 session 不返回 500。
 
-- [x] **Step 2: 运行接口与页面测试，确认当前不公开电脑英雄、能量和技能状态**
+- [ ] **Step 2: 运行接口与页面测试，确认当前不公开电脑英雄、能量和技能状态**
 
 Run: `pytest tests/test_api.py tests/test_app.py tests/test_acceptance_scenarios.py -q`
 
 Expected: 新增断言失败。
 
-- [x] **Step 3: 增量扩展公开 API 与页面**
+- [ ] **Step 3: 增量扩展公开 API 与页面**
 
 `public_battle_state()` 为双方各输出 `hero`、`combatant` 与 `skill` 的公开字段；只为玩家输出完整 `hand`。战斗页在电脑区域增加英雄名、能量和技能本回合状态，复用现有视觉语言，不修改 1920×1080 舞台或卡牌素材。
 
-- [x] **Step 4: 适配创建和演示路由**
+- [ ] **Step 4: 适配创建和演示路由**
 
 API 和 demo 创建对局均调用新的 `BattleState.create()`；当电脑先手时，创建流程必须完成其自动行动或返回明确进行中的电脑回合状态。所有玩家动作端点继续只允许玩家一侧调用，电脑动作只能由服务端 AI 驱动。
 
-- [x] **Step 5: 更新文档与验收清单**
+- [ ] **Step 5: 更新文档与验收清单**
 
 删除“电脑固定 28 生命”“电脑不能主动打出闪避”“电脑无英雄技能”“电脑护盾回合开始清零”“玩家固定先手”等旧规则。新增双方英雄、随机先手、共享牌库、双向响应、私有信息边界和难度不作弊的验收项。
 
-- [x] **Step 6: 完成自动化、真实 HTTP 与人工验收**
+- [ ] **Step 6: 完成自动化、真实 HTTP 与人工验收**
 
 Run: `pytest -q`
 
