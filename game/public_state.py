@@ -41,10 +41,18 @@ def _combatant_to_dict(combatant: Combatant) -> dict:
     }
 
 
-def _side_to_dict(participant: ParticipantState) -> dict:
-    """一方在牌面上公开的全部信息：血条、护盾、能量、英雄和技能状态。
+def _slot_to_dict(slot: CardDefinition | None) -> dict | None:
+    """装备槽里挂着的牌；空槽也要给出 None，两个槽位的键才永远存在。"""
+    if slot is None:
+        return None
+    return _card_to_dict(slot)
 
-    手牌与抽牌堆不在其中——它们分别由调用方按可见性单独挂上。
+
+def _side_to_dict(participant: ParticipantState) -> dict:
+    """一方在牌面上公开的全部信息：血条、护盾、能量、英雄、技能状态和装备。
+
+    手牌与抽牌堆不在其中——它们分别由调用方按可见性单独挂上；装备挂在角色身上，
+    是谁都看得见的东西，所以它属于这一侧，双方对称输出。
     """
     return {
         **_combatant_to_dict(participant.combatant),
@@ -55,6 +63,10 @@ def _side_to_dict(participant: ParticipantState) -> dict:
             "value": participant.hero.skill_value,
             "cost": SKILL_COST,
             "used_this_turn": participant.skill_used_this_turn,
+        },
+        "equipment": {
+            "weapon": _slot_to_dict(participant.weapon),
+            "armor": _slot_to_dict(participant.armor),
         },
     }
 

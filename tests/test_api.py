@@ -313,6 +313,56 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
     assert "电脑使用【重击】，对你造成 10 点伤害" in state["log"]
 
 
+def test_public_state_shows_both_sides_equipment_symmetrically(tmp_path):
+    client = make_client(tmp_path)
+    with client.session_transaction() as session:
+        save_battle(
+            session,
+            BattleState.create("warrior", random.Random(7), starting_side=Side.PLAYER),
+        )
+        session.modified = True
+
+    state = client.get("/api/game").get_json()["data"]
+
+    # 两个槽位任何时刻都在，没装备时是 None，前端可以无条件读。
+    assert state["player"]["equipment"] == {"weapon": None, "armor": None}
+    assert state["enemy"]["equipment"] == {"weapon": None, "armor": None}
+    assert "hand" not in state["enemy"]
+    assert "draw_pile" not in state["enemy"]
+
+
+def test_public_state_shows_equipment_after_a_card_is_played(tmp_path):
+    client = make_client(tmp_path)
+    with client.session_transaction() as session:
+        save_battle(
+            session,
+            BattleState.create("warrior", random.Random(7), starting_side=Side.PLAYER),
+        )
+        side_state(session, "player")["hand"] = [
+            {"id": "player-longsword", "key": "longsword"}
+        ]
+        session.modified = True
+
+    response = client.post(
+        "/api/game/actions/card", json={"card_id": "player-longsword"}
+    )
+
+    assert response.status_code == 200
+    state = response.get_json()["data"]
+    assert state["player"]["equipment"] == {
+        "weapon": {
+            "key": "longsword",
+            "name": "长剑",
+            "cost": 1,
+            "effect_type": "equip",
+            "value": 2,
+        },
+        "armor": None,
+    }
+    # 装备是自己身上看得见的东西，但也不会跑到对面身上去。
+    assert state["enemy"]["equipment"] == {"weapon": None, "armor": None}
+
+
 def test_public_state_shows_both_public_resources_but_not_enemy_hand(tmp_path):
     client = make_client(tmp_path)
     # 先手由 RNG 决定，这里直接把玩家先手的开局写进 session，双方能量才都是 3。

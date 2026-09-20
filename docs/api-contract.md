@@ -26,7 +26,7 @@
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | `GET` | `/api/heroes` | 获取角色列表和技能数据 |
-| `GET` | `/api/cards` | 获取卡牌定义 |
+| `GET` | `/api/cards` | 获取卡牌定义（含长剑、铁甲两张装备牌，`effect_type` 为 `"equip"`） |
 
 目录接口统一返回：
 
@@ -44,7 +44,7 @@
 |---|---|---|
 | `POST` | `/api/game` | 使用 `hero_key` 创建新对局，可选 `ai_difficulty` |
 | `GET` | `/api/game` | 获取当前对局的公开状态 |
-| `POST` | `/api/game/actions/card` | 使用 `card_id` 出牌 |
+| `POST` | `/api/game/actions/card` | 使用 `card_id` 出牌，攻击牌、防御牌和装备牌都走这一条 |
 | `POST` | `/api/game/actions/skill` | 使用角色技能 |
 | `POST` | `/api/game/actions/end-turn` | 结束玩家回合，电脑按能量连续行动后进入下一回合 |
 | `POST` | `/api/game/actions/respond` | 对挂起的攻击响应 `dodge` 或 `pass` |
@@ -88,6 +88,16 @@ POST /api/game
         "cost": 2,
         "used_this_turn": false
       },
+      "equipment": {
+        "weapon": {
+          "key": "longsword",
+          "name": "长剑",
+          "cost": 1,
+          "effect_type": "equip",
+          "value": 2
+        },
+        "armor": null
+      },
       "hand": []
     },
     "enemy": {
@@ -103,6 +113,10 @@ POST /api/game
         "value": 10,
         "cost": 2,
         "used_this_turn": false
+      },
+      "equipment": {
+        "weapon": null,
+        "armor": null
       }
     },
     "response": {
@@ -123,7 +137,17 @@ POST /api/game
 }
 ```
 
-双方公开字段完全对称：血量、护盾、能量、英雄、技能状态两边都有，`starting_side` 说明本局谁先手。只有 `player` 带 `hand`（玩家自己的手牌），`enemy` 没有 `hand`，也不会有 `enemy_hand`、`enemy_draw_pile` 这类键——电脑的手牌与抽牌堆不进入 API 响应，没有前端可以绕过这一点。前端只根据 `available_actions` 和当前状态决定按钮展示与禁用；最终合法性仍由后端判断。
+双方公开字段完全对称：血量、护盾、能量、英雄、技能状态和装备两边都有，`starting_side` 说明本局谁先手。只有 `player` 带 `hand`（玩家自己的手牌），`enemy` 没有 `hand`，也不会有 `enemy_hand`、`enemy_draw_pile` 这类键——电脑的手牌与抽牌堆不进入 API 响应，没有前端可以绕过这一点。前端只根据 `available_actions` 和当前状态决定按钮展示与禁用；最终合法性仍由后端判断。
+
+### 装备字段
+
+`equipment` 是双方都有的公开字段（决策 10），形状与 `hero`、`skill` 一致：
+
+- `weapon` 和 `armor` 两个键**任何时刻都存在**，没装备时是 `null`，前端可以无条件读，不用先判断键在不在；
+- 装上装备后，对应槽位是那张装备牌的完整定义：`key`、`name`、`cost`、`effect_type`（`"equip"`）、`value`；
+- 装备是挂在角色身上、对面也看得见的信息，所以两边对称输出；手牌仍然只有玩家自己有。
+
+装备不需要任何新路由：`POST /api/game/actions/card` 照常接受装备牌的 `card_id`，成功后就地更新 `equipment`，同一次响应里就能看到槽位变化。装备牌不进入弃牌堆，所以它不会出现在任何取牌区的接口数据里。
 
 ## 错误格式
 
