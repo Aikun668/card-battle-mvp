@@ -100,15 +100,19 @@ function setHealth(prefix, combatant) {
   if (fill) fill.style.width = `${Math.max(0, Math.min(100, (combatant.hp / combatant.max_hp) * 100))}%`;
 }
 
-function renderEnergy(energy) {
-  setText("player-energy", energy);
-  const pips = document.getElementById("energy-pips");
+function renderEnergy(prefix, energy) {
+  setText(`${prefix}-energy`, energy);
+  const pips = document.getElementById(`${prefix}-energy-pips`);
   pips.innerHTML = "";
   for (let index = 0; index < 3; index += 1) {
     const pip = document.createElement("span");
     pip.className = index < energy ? "energy-pip is-full" : "energy-pip";
     pips.appendChild(pip);
   }
+}
+
+function renderSkillState(prefix, skill) {
+  setText(`${prefix}-skill`, `${skill.name} · ${skill.used_this_turn ? "本回合已使用" : "待用"}`);
 }
 
 function effectCopy(card) {
@@ -244,36 +248,39 @@ function renderState(state) {
   setText("phase-label", phase[0]);
   setText("phase-hint", phase[1]);
   setText("enemy-name", state.enemy.name);
+  setText("enemy-hero", `电脑英雄：${state.enemy.hero.name}`);
   setText(
     "enemy-difficulty",
     `AI 对手 · ${difficultyLabels[state.ai_difficulty] || state.ai_difficulty}`,
   );
-  setText("player-name", state.hero.name);
+  setText("player-name", state.player.hero.name);
   setHealth("enemy", state.enemy);
   setHealth("player", state.player);
   setText("enemy-shield", state.enemy.shield);
   setText("player-shield", state.player.shield);
-  renderEnergy(state.player.energy);
-  setText("skill-name", state.skill.name);
-  setText("skill-effect", skillEffectCopy(state.skill));
-  const skillUnavailableReason = state.skill.used_this_turn
+  renderEnergy("enemy", state.enemy.energy);
+  renderEnergy("player", state.player.energy);
+  renderSkillState("enemy", state.enemy.skill);
+  setText("skill-name", state.player.skill.name);
+  setText("skill-effect", skillEffectCopy(state.player.skill));
+  const skillUnavailableReason = state.player.skill.used_this_turn
     ? "本回合已使用"
-    : state.player.energy < state.skill.cost
-      ? `能量不足（需要 ${state.skill.cost}，当前 ${state.player.energy}）`
-      : `消耗 ${state.skill.cost} 点能量 · 每回合限用一次`;
+    : state.player.energy < state.player.skill.cost
+      ? `能量不足（需要 ${state.player.skill.cost}，当前 ${state.player.energy}）`
+      : `消耗 ${state.player.skill.cost} 点能量 · 每回合限用一次`;
   setText("skill-description", skillUnavailableReason);
-  setText("skill-cost", `⚡ ${state.skill.cost}`);
+  setText("skill-cost", `⚡ ${state.player.skill.cost}`);
   renderResponse(state);
-  const skillAsset = heroSkillAssets[state.hero.key];
+  const skillAsset = heroSkillAssets[state.player.hero.key];
   if (skillAsset && refs.skillIcon) {
     refs.skillIcon.src = `/static/assets/${skillAsset}`;
-    refs.skillIcon.alt = `${state.skill.name}技能图示`;
+    refs.skillIcon.alt = `${state.player.skill.name}技能图示`;
   }
   refs.skillButton.disabled = !state.available_actions.use_skill;
   refs.skillButton.title = skillUnavailableReason;
   refs.skillButton.dataset.availability = state.available_actions.use_skill ? "ready" : "blocked";
   refs.endTurn.disabled = !state.available_actions.end_turn;
-  renderHand(state.hand, state.available_actions.play_card, state.player.energy, state.phase === "PLAYER_TURN");
+  renderHand(state.player.hand, state.available_actions.play_card, state.player.energy, state.phase === "PLAYER_TURN");
   renderLog(state.log);
 
   if (state.phase === "PLAYER_TURN") refs.shell.dataset.phase = "player";
@@ -295,7 +302,7 @@ function showToast(message) {
 
 function showResult(state) {
   document.getElementById("result-title").textContent = outcomeLabels[state.phase];
-  document.getElementById("result-copy").textContent = `第 ${state.round_number} 回合 · ${state.hero.name} 最终生命值 ${state.player.hp}`;
+  document.getElementById("result-copy").textContent = `第 ${state.round_number} 回合 · ${state.player.hero.name} 最终生命值 ${state.player.hp}`;
   refs.resultOverlay.classList.remove("is-hidden");
 }
 

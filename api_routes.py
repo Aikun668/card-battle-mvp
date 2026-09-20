@@ -6,7 +6,7 @@ from game.battle import BattleState
 from game.catalog import CARDS, HEROES
 from game.models import AIDifficulty, BattlePhase
 from game.public_state import public_battle_state
-from game.session_state import clear_battle, load_battle, save_battle
+from game.session_state import clear_battle, load_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
 
 
@@ -81,9 +81,10 @@ def create_api_blueprint() -> Blueprint:
             return error_response(
                 "INVALID_DIFFICULTY", "请选择有效的电脑难度", status=422
             )
+        # 电脑先手时 create() 已经同步跑完它开局的整个回合，这里只会拿到玩家回合或终局。
         battle = BattleState.create(hero_key, random.Random(), ai_difficulty)
         session.pop(RESULT_SAVED_KEY, None)
-        save_battle(session, battle)
+        persist_battle(session, battle)
         return response(public_battle_state(battle), status=201)
 
     @api.post("/game/actions/card")

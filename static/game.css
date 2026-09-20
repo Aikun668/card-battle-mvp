@@ -103,6 +103,7 @@ button:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 4p
 
 .minor-stat, .resource-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 14px; }
 .minor-stat b, .resource-line b { color: var(--paper); font-size: 17px; }
+.skill-state { color: var(--muted); font-size: 13px; letter-spacing: .04em; }
 
 .deck-hint { height: 94px; position: relative; }
 .deck-hint span { position: absolute; width: 58px; height: 80px; border: 1px solid var(--gold-dim); background: #111b2b; transform: rotate(9deg); right: 12px; top: 3px; }

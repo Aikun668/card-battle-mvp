@@ -1,6 +1,10 @@
+import random
+
 from app import create_app
-from game.battle import ROUND_LIMIT
+from game.battle import LEGACY_ENEMY_HERO_KEY, ROUND_LIMIT, BattleState
 from game.catalog import HEROES
+from game.models import Side
+from game.session_state import save_battle
 
 
 def make_client(tmp_path):
@@ -98,8 +102,8 @@ def test_create_game_returns_public_state_without_hidden_deck_data(tmp_path):
     assert state["phase"] == "PLAYER_TURN"
     assert state["round_number"] == 1
     assert state["player"]["energy"] == 3
-    assert len(state["hand"]) == 5
-    assert all("name" in card and "cost" in card for card in state["hand"])
+    assert len(state["player"]["hand"]) == 5
+    assert all("name" in card and "cost" in card for card in state["player"]["hand"])
     assert "enemy_hand" not in state
     assert "draw_pile" not in state
     assert "enemy_draw_pile" not in state
@@ -115,7 +119,9 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
         drop_enemy_dodge(session)
         session.modified = True
     state = client.get("/api/game").get_json()["data"]
-    card_id = next(card["id"] for card in state["hand"] if card["key"] == "slash")
+    card_id = next(
+        card["id"] for card in state["player"]["hand"] if card["key"] == "slash"
+    )
     enemy_hp_before = state["enemy"]["hp"]
 
     card_response = client.post("/api/game/actions/card", json={"card_id": card_id})
@@ -305,3 +311,136 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
     assert state["player"]["hp"] == hp_before - 6
     assert state["player"]["shield"] == 0
     assert "电脑使用【重击】，对你造成 10 点伤害" in state["log"]
+
+
+def test_public_state_shows_both_public_resources_but_not_enemy_hand(tmp_path):
+    client = make_client(tmp_path)
+    # 先手由 RNG 决定，这里直接把玩家先手的开局写进 session，双方能量才都是 3。
+    with client.session_transaction() as session:
+        save_battle(
+            session,
+            BattleState.create("mage", random.Random(7), starting_side=Side.PLAYER),
+        )
+        session.modified = True
+
+    state = client.get("/api/game").get_json()["data"]
+
+    assert state["player"]["energy"] == 3
+    assert state["enemy"]["energy"] == 3
+    assert state["player"]["hero"]["key"] == "mage"
+    assert state["player"]["hero"]["name"] == "法师"
+    assert state["enemy"]["hero"]["key"] in {"warrior", "mage", "ranger"}
+    assert state["enemy"]["hero"]["max_hp"] == state["enemy"]["max_hp"]
+    assert state["enemy"]["skill"]["name"] == state["enemy"]["hero"]["skill_name"]
+    assert state["enemy"]["skill"]["cost"] == 2
+    assert state["enemy"]["skill"]["used_this_turn"] is False
+    assert "hand" not in state["enemy"]
+    assert "draw_pile" not in state["enemy"]
+    assert "enemy_hand" not in state
+    assert "enemy_draw_pile" not in state
+
+
+def test_a_state_created_with_the_enemy_first_has_already_played_its_opening_turn(
+    tmp_path,
+):
+    client = make_client(tmp_path)
+    with client.session_transaction() as session:
+        save_battle(
+            session,
+            BattleState.create("warrior", random.Random(11), starting_side=Side.ENEMY),
+        )
+        session.modified = True
+
+    state = client.get("/api/game").get_json()["data"]
+
+    assert state["starting_side"] == "enemy"
+    assert state["phase"] in {"PLAYER_TURN", "VICTORY", "DEFEAT", "DRAW"}
+    assert any(entry.startswith(("电脑使用", "电脑释放技能")) for entry in state["log"])
+    # 电脑先手跑完后轮到玩家，玩家资源按自己的回合重置。
+    assert state["player"]["energy"] == 3
+
+
+def test_create_game_never_hands_back_a_mid_enemy_turn(tmp_path):
+    client = make_client(tmp_path)
+    first_movers = set()
+
+    for _ in range(20):
+        response = client.post("/api/game", json={"hero_key": "warrior"})
+
+        assert response.status_code == 201
+        state = response.get_json()["data"]
+        assert state["phase"] in {"PLAYER_TURN", "VICTORY", "DEFEAT", "DRAW"}
+        first_movers.add(state["starting_side"])
+
+    assert first_movers == {"player", "enemy"}
+
+
+def test_public_state_keeps_both_sides_resources_across_refreshes(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior", "ai_difficulty": "hard"})
+    with client.session_transaction() as session:
+        player = side_state(session, "player")
+        player["combatant"]["energy"] = 2
+        player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
+        player["skill_used_this_turn"] = True
+        session["battle"]["starting_side"] = "player"
+        session["battle"]["phase"] = "PLAYER_TURN"
+        freeze_enemy_hand(session, ENEMY_DOUBLE_HEAVY)
+        pin_enemy_warrior(session)
+        session.modified = True
+
+    client.post("/api/game/actions/end-turn")
+    first = client.get("/api/game").get_json()["data"]
+    second = client.get("/api/game").get_json()["data"]
+
+    assert first == second
+    assert first["phase"] == "RESPONSE"
+    assert first["response"]["active"] is True
+    assert first["response"]["damage"] == 10
+    assert first["player"]["hero"]["key"] == "warrior"
+    assert first["player"]["skill"]["used_this_turn"] is True
+    assert first["player"]["energy"] == 2
+    assert first["enemy"]["hero"]["key"] == "warrior"
+    assert first["enemy"]["skill"]["name"] == "守护"
+    # 电脑打完一张重击后还剩 1 点能量，这份公开资源刷新后照样能看到。
+    assert first["enemy"]["energy"] == 1
+
+
+def test_public_state_serves_a_legacy_flat_session_without_error(tmp_path):
+    client = make_client(tmp_path)
+    with client.session_transaction() as session:
+        session["battle"] = {
+            "hero": {"key": "mage"},
+            "player": {
+                "name": "法师",
+                "max_hp": 24,
+                "hp": 20,
+                "shield": 3,
+                "energy": 2,
+            },
+            "hand": [{"id": "c1", "key": "slash"}],
+            "draw_pile": ["slash", "shield"],
+            "discard_pile": ["heal"],
+            "skill_used_this_turn": True,
+            "enemy": {"name": "电脑", "max_hp": 28, "hp": 12, "shield": 0, "energy": 1},
+            "enemy_hand": [{"id": "e1", "key": "slash"}],
+            "enemy_draw_pile": ["heavy_strike"],
+            "enemy_discard_pile": [],
+            "round_number": 4,
+            "phase": "PLAYER_TURN",
+            "log": ["旧存档"],
+        }
+        session.modified = True
+
+    response = client.get("/api/game")
+
+    assert response.status_code == 200
+    state = response.get_json()["data"]
+    assert state["round_number"] == 4
+    assert state["player"]["hero"]["key"] == "mage"
+    assert state["player"]["hp"] == 20
+    assert state["enemy"]["hero"]["key"] == LEGACY_ENEMY_HERO_KEY
+    assert state["enemy"]["max_hp"] == HEROES[LEGACY_ENEMY_HERO_KEY].max_hp
+    assert state["enemy"]["hp"] == 12
+    assert [card["key"] for card in state["player"]["hand"]] == ["slash"]
+    assert "enemy_hand" not in state

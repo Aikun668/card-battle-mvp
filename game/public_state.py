@@ -1,6 +1,13 @@
 from game.battle import BattleState
-from game.catalog import CARDS
-from game.models import BattlePhase, CardDefinition, Combatant, HeroDefinition, Side
+from game.catalog import CARDS, SKILL_COST
+from game.models import (
+    BattlePhase,
+    CardDefinition,
+    Combatant,
+    HeroDefinition,
+    ParticipantState,
+    Side,
+)
 
 
 def _hero_to_dict(hero: HeroDefinition) -> dict:
@@ -34,6 +41,24 @@ def _combatant_to_dict(combatant: Combatant) -> dict:
     }
 
 
+def _side_to_dict(participant: ParticipantState) -> dict:
+    """一方在牌面上公开的全部信息：血条、护盾、能量、英雄和技能状态。
+
+    手牌与抽牌堆不在其中——它们分别由调用方按可见性单独挂上。
+    """
+    return {
+        **_combatant_to_dict(participant.combatant),
+        "hero": _hero_to_dict(participant.hero),
+        "skill": {
+            "name": participant.hero.skill_name,
+            "type": participant.hero.skill_type,
+            "value": participant.hero.skill_value,
+            "cost": SKILL_COST,
+            "used_this_turn": participant.skill_used_this_turn,
+        },
+    }
+
+
 def public_battle_state(battle: BattleState) -> dict:
     is_player_turn = battle.phase is BattlePhase.PLAYER_TURN
     pending_attack = battle.pending_attack
@@ -41,24 +66,21 @@ def public_battle_state(battle: BattleState) -> dict:
     player_is_defending = (
         pending_attack is not None and pending_attack.defender is Side.PLAYER
     )
-    return {
-        "phase": battle.phase.value,
-        "round_number": battle.round_number,
-        "ai_difficulty": battle.ai_difficulty.value,
-        "hero": _hero_to_dict(battle.hero),
-        "player": _combatant_to_dict(battle.player),
-        "enemy": _combatant_to_dict(battle.enemy),
+    # 双方公开字段完全对称，只有玩家多一份自己的手牌；电脑的手牌与抽牌堆不出现在这里。
+    player_state = {
+        **_side_to_dict(battle.participant(Side.PLAYER)),
         "hand": [
             {"id": card["id"], **_card_to_dict(CARDS[card["key"]])}
             for card in battle.hand
         ],
-        "skill": {
-            "name": battle.hero.skill_name,
-            "type": battle.hero.skill_type,
-            "value": battle.hero.skill_value,
-            "cost": 2,
-            "used_this_turn": battle.skill_used_this_turn,
-        },
+    }
+    return {
+        "phase": battle.phase.value,
+        "round_number": battle.round_number,
+        "starting_side": battle.starting_side.value,
+        "ai_difficulty": battle.ai_difficulty.value,
+        "player": player_state,
+        "enemy": _side_to_dict(battle.participant(Side.ENEMY)),
         "response": {
             "active": player_is_defending,
             "card_name": pending_attack.card_name if player_is_defending else None,
@@ -71,7 +93,7 @@ def public_battle_state(battle: BattleState) -> dict:
                 is_player_turn
                 and not battle.is_finished()
                 and not battle.skill_used_this_turn
-                and battle.player.energy >= 2
+                and battle.player.energy >= SKILL_COST
             ),
             "end_turn": is_player_turn and not battle.is_finished(),
             "respond": {

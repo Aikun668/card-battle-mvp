@@ -9,11 +9,30 @@
 <main class="battle-page">
 <section class="enemy-panel">
 <h2>{{ battle.enemy.name }}</h2>
+<p>电脑英雄：{{ battle.enemy_hero.name }}</p>
 <p>生命值：{{ battle.enemy.hp }} / {{ battle.enemy.max_hp }}</p>
 <p>护盾：{{ battle.enemy.shield }}</p>
+<p>电脑能量：{{ battle.enemy.energy }}</p>
+<p>电脑技能：{{ battle.enemy_hero.skill_name }}
+{%- if battle.enemy_skill_used_this_turn %}（本回合技能已经使用过）{% else %}（本回合待用）{% endif %}</p>
 {% if is_enemy_turn %}<p class="status">电脑行动中…</p>{% endif %}
 {% if is_player_turn %}<p class="status">当前行动方：玩家</p>{% endif %}
 </section>
+
+{% if phase == "RESPONSE" and battle.pending_attack %}
+<section class="response-panel">
+<h2>响应攻击</h2>
+<p>电脑使用【{{ battle.pending_attack.card_name }}】，即将造成 {{ battle.pending_attack.damage }} 点伤害。</p>
+{% if battle.can_dodge() %}
+<form method="post" action="{{ url_for('demo.battle_respond') }}">
+<button type="submit" name="action" value="dodge">使用闪避（消耗 1 点能量）</button>
+</form>
+{% endif %}
+<form method="post" action="{{ url_for('demo.battle_respond') }}">
+<button type="submit" name="action" value="pass">放弃响应</button>
+</form>
+</section>
+{% endif %}
 
 <section class="round-banner">
 <h1>第 {{ battle.round_number }} 回合</h1>

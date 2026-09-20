@@ -17,13 +17,19 @@
     <div class="combatant-summary">
       <div class="name-line">
         <h1 id="enemy-name">电脑</h1>
+        <span class="eyebrow" id="enemy-hero">电脑英雄</span>
         <span class="eyebrow" id="enemy-difficulty">AI 对手</span>
       </div>
       <div class="health-line">
         <div class="health-track"><span id="enemy-health-fill"></span></div>
         <strong id="enemy-health">-- / --</strong>
       </div>
-      <div class="minor-stat"><span>护盾</span><b id="enemy-shield">0</b></div>
+      <div class="resource-line">
+        <span>护盾 <b id="enemy-shield">0</b></span>
+        <span class="energy-label">能量 <b id="enemy-energy">0</b></span>
+        <span class="energy-pips" id="enemy-energy-pips" aria-label="电脑能量"></span>
+        <span class="skill-state" id="enemy-skill">技能待用</span>
+      </div>
     </div>
     <div class="deck-hint" aria-hidden="true">
       <span></span><span></span><span></span>
@@ -93,7 +99,7 @@
       <div class="resource-line">
         <span>护盾 <b id="player-shield">0</b></span>
         <span class="energy-label">能量 <b id="player-energy">0</b></span>
-        <span class="energy-pips" id="energy-pips" aria-label="能量"></span>
+        <span class="energy-pips" id="player-energy-pips" aria-label="能量"></span>
       </div>
     </div>
     <div class="player-actions">

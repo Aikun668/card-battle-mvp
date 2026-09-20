@@ -133,6 +133,46 @@ def test_response_panel_layer_sits_above_player_zone():
     assert ".arena-layout { z-index: 2; }" in styles
 
 
+def test_both_sides_show_the_same_public_resources_contract_is_declared():
+    template = (PROJECT_ROOT / "templates" / "game.html").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "static" / "game.js").read_text(encoding="utf-8")
+
+    for element_id in (
+        "enemy-hero",
+        "enemy-energy",
+        "enemy-energy-pips",
+        "enemy-skill",
+        "player-energy",
+        "player-energy-pips",
+    ):
+        assert f'id="{element_id}"' in template
+
+    assert 'setText("enemy-hero"' in script
+    assert 'renderSkillState("enemy", state.enemy.skill)' in script
+    assert "setText(`${prefix}-skill`" in script
+    assert 'renderEnergy("enemy", state.enemy.energy)' in script
+    assert 'renderEnergy("player", state.player.energy)' in script
+    assert "state.enemy.hero.name" in script
+    assert "state.player.hero.name" in script
+    assert "state.enemy.skill" in script
+    assert "state.player.skill" in script
+    # 电脑手牌与抽牌堆是私有信息：页面上没有它们的位置，脚本里也不许读。
+    assert "enemy_hand" not in script
+    assert "enemy.hand" not in script
+    assert "enemy.draw_pile" not in script
+    assert "enemy_draw_pile" not in script
+
+
+def test_demo_battle_page_carries_a_response_form_contract_is_declared():
+    template = (PROJECT_ROOT / "templates" / "battle.html").read_text(encoding="utf-8")
+
+    assert "url_for('demo.battle_respond')" in template
+    assert 'name="action" value="dodge"' in template
+    assert 'name="action" value="pass"' in template
+    assert "电脑英雄" in template
+    assert "电脑能量" in template
+
+
 def test_response_panel_is_positioned_as_a_central_overlay():
     styles = (PROJECT_ROOT / "static" / "game.css").read_text(encoding="utf-8")
 

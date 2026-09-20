@@ -461,7 +461,7 @@ git commit -m "fix: prevent AI from reading hidden player cards"
 - Consumes: Tasks 1–5 的双参与者状态、通用响应和 `AIObservation`。
 - Produces: 不泄露电脑手牌的公开 API；页面上双方对称的英雄/资源/技能信息；唯一的对等规则文档。
 
-- [ ] **Step 1: 写公开状态与隐私边界测试**
+- [x] **Step 1: 写公开状态与隐私边界测试**
 
 ```python
 def test_public_state_shows_both_public_resources_but_not_enemy_hand(client):
@@ -475,25 +475,25 @@ def test_public_state_shows_both_public_resources_but_not_enemy_hand(client):
 
 再覆盖：电脑先手时 `POST /api/game` 返回可保存状态；刷新后双方英雄、能量、技能次数和 pending response 不丢失；旧 session 不返回 500。
 
-- [ ] **Step 2: 运行接口与页面测试，确认当前不公开电脑英雄、能量和技能状态**
+- [x] **Step 2: 运行接口与页面测试，确认当前不公开电脑英雄、能量和技能状态**
 
 Run: `pytest tests/test_api.py tests/test_app.py tests/test_acceptance_scenarios.py -q`
 
 Expected: 新增断言失败。
 
-- [ ] **Step 3: 增量扩展公开 API 与页面**
+- [x] **Step 3: 增量扩展公开 API 与页面**
 
 `public_battle_state()` 为双方各输出 `hero`、`combatant` 与 `skill` 的公开字段；只为玩家输出完整 `hand`。战斗页在电脑区域增加英雄名、能量和技能本回合状态，复用现有视觉语言，不修改 1920×1080 舞台或卡牌素材。
 
-- [ ] **Step 4: 适配创建和演示路由**
+- [x] **Step 4: 适配创建和演示路由**
 
 API 和 demo 创建对局均调用新的 `BattleState.create()`；当电脑先手时，创建流程必须完成其自动行动或返回明确进行中的电脑回合状态。所有玩家动作端点继续只允许玩家一侧调用，电脑动作只能由服务端 AI 驱动。
 
-- [ ] **Step 5: 更新文档与验收清单**
+- [x] **Step 5: 更新文档与验收清单**
 
 删除“电脑固定 28 生命”“电脑不能主动打出闪避”“电脑无英雄技能”“电脑护盾回合开始清零”“玩家固定先手”等旧规则。新增双方英雄、随机先手、共享牌库、双向响应、私有信息边界和难度不作弊的验收项。
 
-- [ ] **Step 6: 完成自动化、真实 HTTP 与人工验收**
+- [x] **Step 6: 完成自动化、真实 HTTP 与人工验收**
 
 Run: `pytest -q`
 
@@ -501,12 +501,33 @@ Expected: 全部通过。
 
 真实 HTTP 至少验证：玩家先手一局、电脑先手一局、电脑使用英雄技能、玩家闪避、电脑闪避、双方护盾持续、难度切换后资源不变。人工分别游玩三局，检查双方公开资源都能看见、电脑手牌从不泄露、对局胜负不依赖隐藏作弊信息。
 
-- [ ] **Step 7: 提交公开状态与验收改动**
+- [x] **Step 7: 提交公开状态与验收改动**
 
 ```bash
 git add game/public_state.py api_routes.py demo_routes.py templates/game.html static/game.js README.md docs/interaction-design.md docs/api-contract.md docs/claude-builder/acceptance.md tests/test_api.py tests/test_app.py tests/test_acceptance_scenarios.py
 git commit -m "feat: expose and verify symmetric human AI rules"
 ```
+
+**验收记录（Task 6）**
+
+- 实际改动文件：`game/public_state.py`、`game/battle.py`（只加一行只读别名）、`api_routes.py`、`demo_routes.py`、`templates/game.html`、`templates/battle.html`、`static/game.js`、`static/game.css`、`static/style.css`、`tests/test_api.py`、`tests/test_app.py`、`tests/test_frontend_contract.py`，以及四份文档（`README.md`、`docs/interaction-design.md`、`docs/api-contract.md`、`docs/claude-builder/acceptance.md`）。计划里的 `tests/test_acceptance_scenarios.py` 最终无需改动——Task 1 已经把它的旧键断言迁到 `participants` 分区，本轮公开状态改动没有波及它。
+- 公开状态的字段形状（对计划 Step 3 的落地解释，备查）：`public_battle_state()` 不再有顶层 `hero` / `skill` / `hand`，改为 `player` / `enemy` 两块，每块 = 原有扁平战斗体字段 + 嵌套 `hero` + 嵌套 `skill`（含 `cost` 与 `used_this_turn`），再单独给 `player` 挂 `hand`。新增顶层 `starting_side`。这样 Step 1 那段断言（`state["player"]["energy"]`、`state["enemy"]["hero"]["key"]`）与 Step 3 的"每方自己带 hero / combatant / skill"同时成立，扁平战斗体字段就是计划措辞里的 combatant。**顶层 `hand` 是真删，没有留兼容别名**——对称嵌套是唯一事实来源。
+- `/demo/battle` 死锁的修法（Task 4 冒烟留下的既有缺陷）：补 `demo.battle_respond` 路由 + 模板里的响应表单（使用闪避 / 放弃响应），而不是用 API 驱动的 `game.html` 顶掉老页面。老页面因此第一次能自己打完一整局，`test_a_whole_game_can_be_played_through_the_demo_page` 就是钉这个的——它最多走 150 步卡牌 / 结束回合 / 响应直到终局，任何一步卡死都会红。
+- 偏差（对计划 Step 1 的位置安排）："能打完一整局"这条测试放在 `tests/test_app.py` 而不是 `tests/test_frontend_contract.py`。契约文件保持纯静态断言（模板 id、脚本里出现的取值路径、`enemy_hand` / `enemy.hand` / `enemy.draw_pile` / `enemy_draw_pile` 全部不出现），因为它不导 Flask、本来就是靠读文件做契约；真跑一局属于路由行为，和 `test_app.py` 的其他用例同源。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`node --check static/game.js` 通过、`pytest -q` **170 passed**（Task 5 末是 160），全量连跑 **14 轮 0 失败**（路由用例用非种子 RNG，这个数字是有意跑出来的）。本轮新增 10 个测试：`tests/test_api.py` 5 个、`tests/test_app.py` 3 个、`tests/test_frontend_contract.py` 2 个。
+- 真实的非 test-client HTTP 冒烟（`%TEMP%\smoke_task6.py`，单个本地实例、`use_reloader=False`、跑完即杀进程，**违规总计 0**）：
+  - 60 次创建：先手分布 34:26 / 35:25 / 33:27（三次都是对半），`phase` 恒在 `PLAYER_TURN` 或终局，从没出现 `ENEMY_TURN` / `RESPONSE`；每次创建后扫描 JSON 全文，`enemy_hand` / `enemy_draw_pile` / `enemy_discard_pile` / `draw_pile` / `discard_pile` 一个都没出现，顶层也没有 `hand`；玩家开局恒 3 能量 5 张手牌。
+  - 刷新稳定：20/20 局 `GET /api/game` 连续两次读到的公开状态**逐字节相等**。
+  - 难度不改数值：三档各 10 局，玩家能量恒 `{3}`、起手恒 `{5}`，电脑能量分别是 `{0,3}`（0 是电脑先手局已经花掉的结果，不是难度差异）。
+  - 40 局 `/api` 整局：终局分布 `DEFEAT 22 / DRAW 10 / VICTORY 8`，**玩家闪避 24 次、电脑作为防御方闪避 9 次、电脑释放技能 33 次，双向响应与双向技能都在真实 HTTP 上跑通了**；采样到"护盾 > 0"电脑 326 次、玩家 288 次，双方护盾都跨回合持续。
+  - 12 局 `/demo/battle` 表单整局：**12/12 走到终局**（Task 4 记录的 38% 卡死率归零），页面响应操作 5 次。所有 `POST` 都验证了最终地址落在 `/demo/battle` 或 `/demo/result`（urllib 自动跟随 302，所以判据用最终 URL 而不是状态码）。
+  - 页面冒烟：`/` 返回 `{"service":"card-battle","status":"ok","api_base":"/api","demo":"/demo"}`、`/demo` 含难度选项与 `enemy-hero` / `enemy-energy` / `enemy-skill` 三个新标记、`/demo/heroes` 含确认角色、`/demo/battle` 200。
+  - 人工对局替代说明：三局手动试玩由脚本的整局驱动器覆盖（`/api` 40 局 + 页面 12 局，逐局断言公开状态不变量），没有真人在浏览器上点。**"双方公开资源都看得见、电脑手牌从不泄露、胜负不依赖隐藏信息"这三条，目前是靠冒烟的状态审计 + 契约测试 + Task 5 的观察视图字段冻结共同保证的，不是靠人眼。**
+- 平衡探针（`%TEMP%\balance_probe7.py`，与 Task 3/4/5 同一个脚本，120 局/格）——**逐格与 Task 5 完全一致**：战士 负 30.8 / 32.5 / 31.7、平 67.5~68.3、9.1~9.2 回合；法师 胜 43.3 / 42.5 / 38.3；游侠 胜 18.3 / 18.3 / 17.5；龟缩变体 战士 负 35.0 / 法师 负 73.3 / 游侠 负 95.0；先手拆解 玩家先手 负 23.3 平 75.0 / 玩家后手 负 40.0 平 60.0。连跑两次读数逐字相同（探针全程 `random.Random(seed)`，本就确定）。这与 `game/battle.py` 的 diff 对得上——本轮只多了一行只读别名，没有一条规则被改到。
+- 探针暴露的**文档陈旧**（不是代码问题）：决策 5 的「难度 × 电脑英雄」拆解，上一次记录是在 Task 3 的验收里（电脑=法师 35.0~40.0%、电脑=游侠 28.6~37.1%、电脑=战士 0.0~4.4%）。Task 4 给电脑加了闪避、Task 5 改了威胁估算，两次都只复跑了合计行、没有重新拆格，所以那三组区间已经对不上：现在实测（玩家=游侠）电脑=法师 胜 30.0~32.5%、电脑=游侠 胜 22.9~25.7%、**电脑=战士 胜 0.0~2.2% / 负 93.3~97.8% / 平 0~6.7%**，与 Task 3 那组合计（游侠 胜 22.5~24.2%）才对得上。**结论不变**：电脑抽到战士本身就是一档难度，下一轮平衡该动的是护盾效率（决策 8 的已知风险），不是 AI 评分。
+- 难度轴仍是三档几乎无差别（游侠 18.3 / 18.3 / 17.5，战士 负 30.8 / 32.5 / 31.7），沿用 Task 3/4/5 的结论：留给后续难度任务，本轮按决策 5/6 只记录、不调参。
+- 依旧保留的两处既有偏差（沿自 Task 2/4，本轮不动）：电脑先手时开局那次攻击在 `create()` 里自动按"放弃"结算，所以玩家闪不了开局伤害；**英雄技能的伤害不经过响应窗口**，两边一致。
+- 范围说明：`docs/队友宏观计划/` 下两份队友文档在工作区里处于已修改状态，与本轮无关，提交时**不**纳入。
 
 ## Completion Criteria
 

@@ -5,7 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from game.battle import BattleState
 from game.catalog import CARDS, HEROES
 from game.models import BattlePhase
-from game.session_state import clear_battle, load_battle, save_battle
+from game.session_state import clear_battle, load_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
 
 
@@ -31,7 +31,7 @@ def create_demo_blueprint() -> Blueprint:
             return redirect(url_for("demo.heroes_select"))
         battle = BattleState.create(hero_key, random.Random())
         session.pop(RESULT_SAVED_KEY, None)
-        save_battle(session, battle)
+        persist_battle(session, battle)
         return redirect(url_for("demo.battle_view"))
 
     @demo.get("/battle")
@@ -62,6 +62,19 @@ def create_demo_blueprint() -> Blueprint:
         if not result.ok:
             flash(result.message)
         persist_battle(session, battle)
+        return redirect(url_for("demo.battle_view"))
+
+    @demo.post("/battle/respond")
+    def battle_respond():
+        battle = require_battle()
+        if battle is None:
+            return redirect(url_for("demo.heroes_select"))
+        result = battle.respond(request.form.get("action", ""))
+        if not result.ok:
+            flash(result.message)
+        persist_battle(session, battle)
+        if battle.is_finished():
+            return redirect(url_for("demo.result_view"))
         return redirect(url_for("demo.battle_view"))
 
     @demo.post("/battle/end-turn")

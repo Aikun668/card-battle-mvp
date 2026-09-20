@@ -1,5 +1,8 @@
+import pytest
+
 from app import create_app
 from game.battle import ROUND_LIMIT
+from game.catalog import CARDS, HEROES
 
 
 def make_client(tmp_path):
@@ -22,6 +25,31 @@ def drop_enemy_dodge(session: dict) -> None:
     """电脑手里有闪避就能响应玩家的攻击，这里要验证的是伤害当场落地。"""
     enemy = side_state(session, "enemy")
     enemy["hand"] = [card for card in enemy["hand"] if card["key"] != "dodge"]
+
+
+def freeze_enemy_hand(session: dict, hand: list[dict]) -> None:
+    """锁死电脑手牌：抽牌区和弃牌区清空后，它回合开始的补牌就抽不到东西。"""
+    enemy = side_state(session, "enemy")
+    enemy["hand"] = hand
+    enemy["draw_pile"] = []
+    enemy["discard_pile"] = []
+
+
+def pin_enemy_warrior(session: dict) -> None:
+    """把电脑钉成满血战士，让它的技能评分稳定落在两张重击之下。"""
+    enemy = side_state(session, "enemy")
+    hero = HEROES["warrior"]
+    enemy["hero_key"] = hero.key
+    enemy["combatant"]["max_hp"] = hero.max_hp
+    enemy["combatant"]["hp"] = hero.max_hp
+
+
+# 电脑英雄是随机的，法师技能（2 费 10 伤）与重击同分，会挤进随机池；
+# 固定成战士后它的 8 点护盾技能低于这两张重击，回合里只会打出重击。
+ENEMY_DOUBLE_HEAVY = [
+    {"id": "enemy-heavy-1", "key": "heavy_strike"},
+    {"id": "enemy-heavy-2", "key": "heavy_strike"},
+]
 
 
 def test_start_page_and_hero_page_render(tmp_path):
@@ -74,6 +102,98 @@ def test_battle_page_exposes_player_state_hand_and_end_turn(tmp_path):
     assert "能量" in body
     assert "结束回合" in body
     assert "战斗日志" in body
+
+
+def test_battle_page_shows_the_enemy_hero_and_its_public_resources(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/demo/heroes", data={"hero_key": "mage"})
+    with client.session_transaction() as session:
+        enemy = side_state(session, "enemy")
+        enemy["hero_key"] = "ranger"
+        enemy["combatant"]["max_hp"] = HEROES["ranger"].max_hp
+        enemy["combatant"]["hp"] = HEROES["ranger"].max_hp
+        enemy["combatant"]["energy"] = 2
+        enemy["skill_used_this_turn"] = True
+        session.modified = True
+
+    body = client.get("/demo/battle").get_data(as_text=True)
+
+    assert "游侠" in body
+    assert "电脑英雄：游侠" in body
+    assert "电脑能量：2" in body
+    assert "连射" in body
+    assert "本回合技能已经使用过" in body
+
+
+def test_demo_battle_page_can_answer_an_enemy_attack(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/demo/heroes", data={"hero_key": "warrior"})
+    with client.session_transaction() as session:
+        player = side_state(session, "player")
+        player["combatant"]["energy"] = 2
+        player["combatant"]["shield"] = 0
+        player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
+        session["battle"]["starting_side"] = "player"
+        session["battle"]["phase"] = "PLAYER_TURN"
+        freeze_enemy_hand(session, ENEMY_DOUBLE_HEAVY)
+        pin_enemy_warrior(session)
+        session.modified = True
+
+    client.post("/demo/battle/end-turn")
+    page = client.get("/demo/battle").get_data(as_text=True)
+    assert "使用闪避" in page
+    assert "放弃响应" in page
+
+    response = client.post("/demo/battle/respond", data={"action": "dodge"})
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        player = side_state(session, "player")
+        assert session["battle"]["phase"] == "PLAYER_TURN"
+        # 闪避牌打出后进了弃牌堆，回合交回玩家时补一张牌、能量重新回满。
+        assert all(card["key"] != "dodge" for card in player["hand"])
+        assert player["discard_pile"] == ["dodge"]
+        assert player["combatant"]["energy"] == 3
+        assert any("抵消了本次伤害" in entry for entry in session["battle"]["log"])
+
+
+def test_a_whole_game_can_be_played_through_the_demo_page(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/demo/heroes", data={"hero_key": "ranger"})
+    terminal = {"VICTORY", "DEFEAT", "DRAW"}
+
+    for _ in range(150):
+        with client.session_transaction() as session:
+            phase = session["battle"]["phase"]
+            if phase in terminal:
+                break
+            player = side_state(session, "player")
+            energy = player["combatant"]["energy"]
+            playable = next(
+                (
+                    card["id"]
+                    for card in player["hand"]
+                    if card["key"] != "dodge" and CARDS[card["key"]].cost <= energy
+                ),
+                None,
+            )
+        if phase == "RESPONSE":
+            # 老页面以前没有响应入口，只能靠重启逃出去；现在必须能在页面上收尾。
+            page = client.get("/demo/battle").get_data(as_text=True)
+            assert "放弃响应" in page
+            response = client.post("/demo/battle/respond", data={"action": "pass"})
+        elif playable is None:
+            response = client.post("/demo/battle/end-turn")
+        else:
+            response = client.post(f"/demo/battle/card/{playable}")
+        assert response.status_code == 302
+    else:
+        pytest.fail("整局游戏没有在 150 步内走到终局")
+
+    with client.session_transaction() as session:
+        assert session["battle"]["phase"] in terminal
+    result_page = client.get("/demo/result").get_data(as_text=True)
+    assert any(label in result_page for label in ("胜利", "失败", "平局"))
 
 
 def test_routes_redirect_to_heroes_when_no_live_battle(tmp_path):

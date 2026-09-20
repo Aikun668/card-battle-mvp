@@ -75,6 +75,7 @@ class BattleState:
     enemy_draw_pile = _zone_alias(Side.ENEMY, "draw_pile")
     enemy_discard_pile = _zone_alias(Side.ENEMY, "discard_pile")
     skill_used_this_turn = _zone_alias(Side.PLAYER, "skill_used_this_turn")
+    enemy_skill_used_this_turn = _zone_alias(Side.ENEMY, "skill_used_this_turn")
 
     def __init__(
         self,

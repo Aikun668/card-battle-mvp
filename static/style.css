@@ -106,10 +106,20 @@ button:disabled {
 .round-banner,
 .hand,
 .log,
-.controls {
+.controls,
+.response-panel {
   background: #232634;
   padding: 1rem;
   border-radius: 6px;
+}
+
+.response-panel {
+  border: 1px solid #e1ad4d;
+}
+
+.response-panel form {
+  display: inline-block;
+  margin-right: 0.5rem;
 }
 
 .round-banner .latest-log {
