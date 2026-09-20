@@ -255,23 +255,22 @@ ENEMY_TURN  → VICTORY / DEFEAT / DRAW / PLAYER_TURN
 
 点击“再来一局”时清空当前战斗状态，回到角色选择页，不沿用上一局的手牌和生命值。
 
-## 9. 推荐页面请求边界
+## 9. 后端与前端请求边界
 
-页面名称和请求职责先按下面的边界实现，避免把所有逻辑堆到一个路由中：
+正式前端通过 `/api` 获取 JSON，页面不自行计算伤害、能量、AI 或胜负。接口的完整字段约定见 [docs/api-contract.md](api-contract.md)。
 
 | 请求 | 作用 |
 |---|---|
-| `GET /` | 显示开始页 |
-| `GET /heroes` | 显示角色选择页 |
-| `POST /heroes` | 确认角色并创建战斗 |
-| `GET /battle` | 展示当前战斗状态 |
-| `POST /battle/card/<card_id>` | 尝试使用一张卡牌 |
-| `POST /battle/skill` | 尝试使用角色技能 |
-| `POST /battle/end-turn` | 结束玩家回合并触发电脑行动 |
-| `GET /result` | 显示战斗结果 |
-| `POST /restart` | 清空战斗并重新开始 |
+| `GET /api/heroes` | 获取角色目录 |
+| `GET /api/cards` | 获取卡牌目录 |
+| `POST /api/game` | 使用 `hero_key` 创建战斗 |
+| `GET /api/game` | 获取当前公开战斗状态 |
+| `POST /api/game/actions/card` | 使用 `card_id` 出牌 |
+| `POST /api/game/actions/skill` | 使用角色技能 |
+| `POST /api/game/actions/end-turn` | 结束玩家回合并触发一次电脑行动 |
+| `POST /api/game/restart` | 清空当前战斗 |
 
-所有 `POST` 操作完成后重定向到展示页，避免刷新浏览器时重复提交上一条操作。
+原有 HTML 页面统一放在 `/demo` 下，仅用于本地联调和人工验收；正式页面由后续插件基于 `/api` 重新设计。
 
 ## 10. MVP 验收场景
 

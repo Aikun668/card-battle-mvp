@@ -3,7 +3,7 @@
 {% block content %}
 <main class="heroes-page">
 <h1>选择你的角色</h1>
-<form id="hero-form" method="post" action="{{ url_for('heroes_confirm') }}">
+<form id="hero-form" method="post" action="{{ url_for('demo.heroes_confirm') }}">
 <div class="hero-grid">
 {% for key, hero in heroes.items() %}
 <label class="hero-card" data-hero="{{ key }}">

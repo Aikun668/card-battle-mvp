@@ -12,6 +12,7 @@ CARDS: dict[str, CardDefinition] = {
     "shield": CardDefinition("shield", "护盾", 1, "shield", 6),
     "heal": CardDefinition("heal", "治疗", 2, "heal", 6),
     "fireball": CardDefinition("fireball", "火球", 3, "damage", 14),
+    "dodge": CardDefinition("dodge", "闪避", 1, "dodge", 0),
 }
 
 FIXED_DECK_KEYS: list[str] = [
@@ -27,4 +28,5 @@ FIXED_DECK_KEYS: list[str] = [
     "heal",
     "heal",
     "fireball",
+    "dodge",
 ]

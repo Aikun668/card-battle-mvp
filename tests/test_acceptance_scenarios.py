@@ -25,8 +25,8 @@ def test_acceptance_walk_through():
     client = app.test_client()
 
     # Scenario 1 — start flow lists three heroes
-    assert client.get("/").status_code == 200
-    body = client.get("/heroes").get_data(as_text=True)
+    assert client.get("/demo").status_code == 200
+    body = client.get("/demo/heroes").get_data(as_text=True)
     for name in ("战士", "法师", "游侠"):
         assert name in body
 
@@ -34,7 +34,7 @@ def test_acceptance_walk_through():
     assert "确认角色" in body and "hero-card" in body
 
     # Scenario 3 — selecting a hero creates a battle with full state
-    r = client.post("/heroes", data={"hero_key": "warrior"}, follow_redirects=True)
+    r = client.post("/demo/heroes", data={"hero_key": "warrior"}, follow_redirects=True)
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     for needle in ("生命值", "护盾", "能量", "结束回合", "战斗日志", "当前回合"):
@@ -50,7 +50,7 @@ def test_acceptance_walk_through():
     with client.session_transaction() as s:
         s["battle"]["hand"] = [{"id": "p-s", "key": "slash"}]
         s.modified = True
-    client.post("/battle/card/p-s", follow_redirects=True)
+    client.post("/demo/battle/card/p-s", follow_redirects=True)
     with client.session_transaction() as s:
         assert s["battle"]["enemy"]["hp"] == 22
         assert s["battle"]["player"]["energy"] == 2
@@ -62,7 +62,7 @@ def test_acceptance_walk_through():
         s["battle"]["player"]["energy"] = 0
         s["battle"]["hand"] = [{"id": "p-fb", "key": "fireball"}]
         s.modified = True
-    r = client.post("/battle/card/p-fb", follow_redirects=True)
+    r = client.post("/demo/battle/card/p-fb", follow_redirects=True)
     assert "能量不足" in r.get_data(as_text=True)
     with client.session_transaction() as s:
         assert s["battle"]["player"]["energy"] == 0
@@ -75,10 +75,10 @@ def test_acceptance_walk_through():
         s["battle"]["player"]["shield"] = 0
         s["battle"]["skill_used_this_turn"] = False
         s.modified = True
-    client.post("/battle/skill", follow_redirects=True)
+    client.post("/demo/battle/skill", follow_redirects=True)
     with client.session_transaction() as s:
         first_shield = s["battle"]["player"]["shield"]
-    r = client.post("/battle/skill", follow_redirects=True)
+    r = client.post("/demo/battle/skill", follow_redirects=True)
     assert "本回合技能已经使用过" in r.get_data(as_text=True)
     with client.session_transaction() as s:
         assert s["battle"]["player"]["shield"] == first_shield
@@ -91,7 +91,7 @@ def test_acceptance_walk_through():
         s["battle"]["player"]["shield"] = 0
         s["battle"]["player"]["hp"] = 32
         s.modified = True
-    client.post("/battle/end-turn", follow_redirects=True)
+    client.post("/demo/battle/end-turn", follow_redirects=True)
     with client.session_transaction() as s:
         assert s["battle"]["player"]["hp"] == 26
         assert s["battle"]["phase"] == "PLAYER_TURN"
@@ -102,8 +102,8 @@ def test_acceptance_walk_through():
     state_before = None
     with client.session_transaction() as s:
         state_before = json.dumps(s["battle"], sort_keys=True)
-    client.get("/battle")
-    client.get("/battle")
+    client.get("/demo/battle")
+    client.get("/demo/battle")
     with client.session_transaction() as s:
         state_after = json.dumps(s["battle"], sort_keys=True)
     assert state_before == state_after
@@ -114,24 +114,24 @@ def test_acceptance_walk_through():
         s["battle"]["hand"] = [{"id": "p-kill", "key": "slash"}]
         s["battle"]["phase"] = "PLAYER_TURN"
         s.modified = True
-    r = client.post("/battle/card/p-kill", follow_redirects=True)
+    r = client.post("/demo/battle/card/p-kill", follow_redirects=True)
     battle_body = r.get_data(as_text=True)
     # The /battle page should now be in VICTORY phase with action buttons disabled
     assert "查看结果" in battle_body or "再来一局" in battle_body
     with client.session_transaction() as s:
         assert s["battle"]["phase"] == "VICTORY"
     # Following the result link shows the result page
-    result_body = client.get("/result").get_data(as_text=True)
+    result_body = client.get("/demo/result").get_data(as_text=True)
     assert "胜利" in result_body or "再来一局" in result_body
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM match_results").fetchone()[0] == 1
 
     # Scenario 10 — restart clears state and returns to hero selection
-    r = client.post("/restart", follow_redirects=True)
+    r = client.post("/demo/restart", follow_redirects=True)
     assert r.status_code == 200
     assert "确认角色" in r.get_data(as_text=True)
     with client.session_transaction() as s:
         assert "battle" not in s
-    r2 = client.get("/battle")
+    r2 = client.get("/demo/battle")
     assert r2.status_code == 302
-    assert r2.headers["Location"].endswith("/heroes")
+    assert r2.headers["Location"].endswith("/demo/heroes")

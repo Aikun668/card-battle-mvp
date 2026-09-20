@@ -7,6 +7,7 @@ class BattlePhase(str, Enum):
     HERO_SELECTION = "HERO_SELECTION"
     PLAYER_TURN = "PLAYER_TURN"
     ENEMY_TURN = "ENEMY_TURN"
+    RESPONSE = "RESPONSE"
     VICTORY = "VICTORY"
     DEFEAT = "DEFEAT"
     DRAW = "DRAW"

@@ -14,6 +14,8 @@ instance/*
 *.sqlite3
 
 .pytest_cache/
+.playwright-cli/
+output/playwright/
 .coverage
 htmlcov/
 

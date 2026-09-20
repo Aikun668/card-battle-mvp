@@ -2,7 +2,7 @@
 
 这是一个以 Python 为主的轻量级网页卡牌对战游戏项目。
 
-当前阶段已经完成 MVP 需求确认，暂未开始功能实现。完整需求见 [docs/mvp.md](docs/mvp.md)，玩法和交互规则见 [docs/interaction-design.md](docs/interaction-design.md)。代码实施步骤见 [实现计划](docs/superpowers/plans/2026-09-18-card-battle-mvp.md)，验收与质量门槛见 [验收文档](docs/acceptance.md)，外部 Claude Code 执行交接见 [Claude Code 交接](docs/claude-code-handoff.md)。
+当前阶段已经完成后端 MVP 和 JSON 接口。现有 HTML 页面只保留为 `/demo` 临时联调入口，正式前端后续由插件构建。完整需求见 [docs/mvp.md](docs/mvp.md)，玩法和交互规则见 [docs/interaction-design.md](docs/interaction-design.md)，接口约定见 [docs/api-contract.md](docs/api-contract.md)。代码实施步骤见 [实现计划](docs/superpowers/plans/2026-09-18-card-battle-mvp.md)，验收与质量门槛见 [验收文档](docs/claude-builder/acceptance.md)，外部 Claude Code 执行交接见 [Claude Code 交接](docs/claude-builder/claude-code-handoff.md)。
 
 ## 一句话玩法
 
@@ -15,7 +15,7 @@
 - 5 种基础卡牌：斩击、重击、护盾、治疗、火球；
 - 固定卡组，不做抽卡、卡牌收集和卡组编辑；
 - 玩家回合、电脑回合、胜利、失败、平局等战斗状态；
-- 开始页、角色选择页、战斗页、结果页；
+- 后端 JSON 接口；HTML 开始页、角色选择页、战斗页、结果页仅作为 `/demo` 联调工具；
 - 战斗日志、能量限制、生命值、护盾和胜负判断。
 
 ## 技术方向
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 flask --app app:create_app run --debug
 ```
 
-启动后浏览器访问 `http://127.0.0.1:5000` 即可进入开始页。SQLite 数据库默认写入 `instance/card_battle.sqlite3`，首次启动时会自动建表。
+启动后访问 `http://127.0.0.1:5000/` 查看服务信息，访问 `http://127.0.0.1:5000/demo` 打开临时联调页面。正式前端使用 `/api` 接口，具体见 [API 接口约定](docs/api-contract.md)。SQLite 数据库默认写入 `instance/card_battle.sqlite3`，首次启动时会自动建表。
 
 如果希望隔离依赖，也可以走标准虚拟环境流程：
 
@@ -81,4 +81,4 @@ pytest -v
 4. 点击“结束回合”，电脑执行一次行动，回到玩家回合或进入下一回合。
 5. 当任一方生命值归零或达到 10 回合上限时进入结果页，点击“再来一局”回到角色选择页，重新开始新一局战斗。
 
-刷新 `/battle` 不会重复执行上一条战斗操作：所有 `POST` 路由都遵循 Post/Redirect/Get 约定。
+刷新 `/demo/battle` 不会重复执行上一条战斗操作：临时联调页面的所有 `POST` 路由都遵循 Post/Redirect/Get 约定。

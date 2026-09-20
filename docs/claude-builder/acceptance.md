@@ -23,7 +23,7 @@
 在项目根目录依次运行：
 
 ```bash
-python -m compileall app.py game
+python -m compileall app.py api_routes.py demo_routes.py web_support.py game
 ruff check .
 ruff format --check .
 pytest -v
@@ -87,9 +87,9 @@ pytest -v
 
 - `BattleState` 序列化后再还原，状态、手牌、回合数、日志和阶段完全一致；
 - 没有进行中的对局时，访问战斗操作会跳转到选角页，不返回 500；
-- 选择角色后以 `POST /heroes` 重定向到 `/battle`；
-- 使用卡牌、技能和结束回合都使用 POST 后重定向；
-- 刷新 `/battle` 只渲染当前状态，不能重复执行上一次动作；
+- 选择角色后，临时联调页面以 `POST /demo/heroes` 重定向到 `/demo/battle`；
+- 临时联调页面使用卡牌、技能和结束回合都使用 POST 后重定向；正式前端使用 `/api` JSON 接口；
+- 刷新 `/demo/battle` 只渲染当前状态，不能重复执行上一次动作；
 - 对局终局结果只写入 SQLite 一次；
 - 重新开始会清除旧对局状态，并回到角色选择页；
 - SQLite 数据库文件只保存在 `instance/`，不被 Git 跟踪。
@@ -100,13 +100,13 @@ pytest -v
 
 | 检查点 | 必须满足 |
 |---|---|
-| 规则位置 | 卡牌、伤害、回合和胜负逻辑位于 `game/`，不能写在 HTML 模板或 Flask 路由里 |
+| 规则位置 | 卡牌、伤害、回合和胜负逻辑位于 `game/`，不能写在 HTML 模板或 HTTP 路由里 |
 | 可变状态 | 不使用模块级全局 `BattleState` 保存不同玩家的对局 |
 | 前置校验 | 每个战斗动作先检查阶段、卡牌归属、能量和终局状态，再修改数据 |
 | 错误反馈 | 失败操作返回中文明确原因，不吞掉异常或静默失败 |
 | 数据库 | SQL 使用参数绑定；数据库连接使用上下文管理器关闭 |
 | 会话数据 | Flask session 中只保存 JSON 安全的字典、列表、字符串、数字和布尔值 |
-| 路由 | 所有会改变战斗状态的路由是 POST，并遵循 Post/Redirect/Get |
+| 路由 | `/api` 的状态改变接口是 POST；`/demo` 页面状态改变接口是 POST 并遵循 Post/Redirect/Get |
 | 模板 | 模板只负责展示与提交表单，不计算伤害、不决定电脑出牌 |
 | 范围控制 | 不新增多人、登录、抽卡、商城、外部 AI API 或未批准功能 |
 
@@ -129,7 +129,7 @@ flask --app app:create_app run --debug
 | 不足能量 | 将能量用到不足后点击高费用牌 | 卡牌与战斗状态不变化，出现“能量不足”提示 |
 | 技能限制 | 使用一次技能后再次点击技能 | 第二次被拒绝，出现“本回合技能已经使用过”提示 |
 | 回合交接 | 点击结束回合 | 玩家按钮不可用，电脑只行动一次，然后进入下一玩家回合或结果页 |
-| 页面刷新 | 在出牌后的 `/battle` 页面刷新两次 | 生命值、手牌、日志和回合数不额外变化 |
+| 页面刷新 | 在出牌后的 `/demo/battle` 页面刷新两次 | 生命值、手牌、日志和回合数不额外变化 |
 | 终局 | 将一方生命值打到 0 或打满 10 回合 | 进入正确结果页，战斗按钮不再可用 |
 | 重新开始 | 点击“再来一局” | 回到选角页，旧手牌、生命值和回合数不被保留 |
 
@@ -172,7 +172,7 @@ git log --oneline --decorate -8
 验收人：
 
 代码质量：
-- [ ] python -m compileall app.py game
+- [ ] python -m compileall app.py api_routes.py demo_routes.py web_support.py game
 - [ ] ruff check .
 - [ ] ruff format --check .
 - [ ] pytest -v

@@ -34,6 +34,7 @@ class BattleState:
         phase: BattlePhase,
         log: list[str],
         skill_used_this_turn: bool = False,
+        pending_attack: dict | None = None,
         rng: random.Random | None = None,
     ) -> None:
         self.hero = hero
@@ -49,6 +50,7 @@ class BattleState:
         self.phase = phase
         self.log = log
         self.skill_used_this_turn = skill_used_this_turn
+        self.pending_attack = pending_attack
         self.rng = rng or random.Random()
 
     @classmethod
@@ -149,6 +151,8 @@ class BattleState:
             return ActionResult(False, "这张卡牌已经不能使用")
         card = self.hand[index]
         definition = CARDS[card["key"]]
+        if definition.effect_type == "dodge":
+            return ActionResult(False, "闪避只能在敌人攻击时使用")
         if self.player.energy < definition.cost:
             shortage = definition.cost - self.player.energy
             return ActionResult(False, f"能量不足，还差 {shortage} 点")
@@ -241,7 +245,12 @@ class BattleState:
         card_id = choose_enemy_card(self)
         if card_id is not None:
             self._play_enemy_card(card_id)
+            if self.phase is BattlePhase.RESPONSE:
+                return ActionResult(True, "")
             self._check_terminal()
+        return self._complete_enemy_turn()
+
+    def _complete_enemy_turn(self) -> ActionResult:
         if self.is_finished():
             return ActionResult(True, "")
         if self.round_number >= ROUND_LIMIT:
@@ -257,6 +266,54 @@ class BattleState:
         self.log.append(f"第 {self.round_number} 回合开始")
         return ActionResult(True, "")
 
+    def _find_dodge_index(self) -> int:
+        for index, card in enumerate(self.hand):
+            if card["key"] == "dodge":
+                return index
+        return -1
+
+    def _has_available_dodge(self) -> bool:
+        return (
+            self._find_dodge_index() != -1
+            and self.player.energy >= CARDS["dodge"].cost
+        )
+
+    def can_dodge(self) -> bool:
+        return self.phase is BattlePhase.RESPONSE and self._has_available_dodge()
+
+    def respond(self, action: str) -> ActionResult:
+        if self.is_finished():
+            return ActionResult(False, "本局已经结束，请重新开始")
+        if self.phase is not BattlePhase.RESPONSE or self.pending_attack is None:
+            return ActionResult(False, "当前没有需要响应的攻击")
+
+        pending_attack = self.pending_attack
+        if action == "dodge":
+            dodge_index = self._find_dodge_index()
+            dodge = CARDS["dodge"]
+            if dodge_index == -1:
+                return ActionResult(False, "当前没有可用的闪避")
+            if self.player.energy < dodge.cost:
+                return ActionResult(False, "能量不足，还差 1 点")
+            self.player.energy -= dodge.cost
+            self.hand.pop(dodge_index)
+            self.discard_pile.append(dodge.key)
+            self.log.append(f"电脑使用【{pending_attack['card_name']}】")
+            self.log.append("玩家使用【闪避】，抵消了本次伤害")
+            self.pending_attack = None
+            return self._complete_enemy_turn()
+
+        if action == "pass":
+            self.apply_damage(self.player, pending_attack["damage"])
+            self.log.append(
+                f"电脑使用【{pending_attack['card_name']}】，对你造成 {pending_attack['damage']} 点伤害"
+            )
+            self.pending_attack = None
+            self._check_terminal()
+            return self._complete_enemy_turn()
+
+        return ActionResult(False, "无效的响应操作")
+
     def _play_enemy_card(self, card_instance_id: str) -> None:
         for i, card in enumerate(self.enemy_hand):
             if card["id"] == card_instance_id:
@@ -264,6 +321,14 @@ class BattleState:
                 self.enemy_discard_pile.append(definition.key)
                 self.enemy_hand.pop(i)
                 if definition.effect_type == "damage":
+                    if self._has_available_dodge():
+                        self.pending_attack = {
+                            "card_key": definition.key,
+                            "card_name": definition.name,
+                            "damage": definition.value,
+                        }
+                        self.phase = BattlePhase.RESPONSE
+                        return
                     self.apply_damage(self.player, definition.value)
                     self.log.append(
                         f"电脑使用【{definition.name}】，对你造成 {definition.value} 点伤害"
@@ -317,6 +382,7 @@ class BattleState:
             "phase": self.phase.value,
             "log": list(self.log),
             "skill_used_this_turn": self.skill_used_this_turn,
+            "pending_attack": dict(self.pending_attack) if self.pending_attack else None,
         }
 
     @classmethod
@@ -350,4 +416,5 @@ class BattleState:
             phase=BattlePhase(payload["phase"]),
             log=list(payload["log"]),
             skill_used_this_turn=payload["skill_used_this_turn"],
+            pending_attack=payload.get("pending_attack"),
         )

@@ -9,7 +9,7 @@
 <p>总回合数：{{ battle.round_number }}</p>
 <p>电脑最终生命值：{{ battle.enemy.hp }}</p>
 <p>玩家最终生命值：{{ battle.player.hp }}</p>
-<form method="post" action="{{ url_for('restart') }}">
+<form method="post" action="{{ url_for('demo.restart') }}">
 <button type="submit">再来一局</button>
 </form>
 </main>

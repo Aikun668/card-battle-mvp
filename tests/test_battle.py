@@ -150,3 +150,86 @@ def test_player_action_rejected_during_enemy_turn():
     result_skill = battle.use_skill()
     assert result_skill.ok is False
     assert result_skill.message == "现在是电脑回合，请等待电脑行动"
+
+
+def test_dodge_cannot_be_played_during_normal_player_turn():
+    battle = make_battle()
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+
+    result = battle.play_card("player-dodge")
+
+    assert result.ok is False
+    assert result.message == "闪避只能在敌人攻击时使用"
+    assert battle.player.energy == 3
+    assert battle.hand == [{"id": "player-dodge", "key": "dodge"}]
+
+
+def test_enemy_attack_pauses_for_available_dodge_without_dealing_damage():
+    battle = make_battle()
+    battle.player.energy = 2
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+
+    battle.end_player_turn()
+    result = battle.resolve_enemy_turn()
+
+    assert result.ok is True
+    assert battle.phase is BattlePhase.RESPONSE
+    assert battle.player.hp == 32
+    assert battle.player.energy == 2
+    assert battle.pending_attack["card_name"] == "重击"
+    assert battle.pending_attack["damage"] == 10
+
+
+def test_using_dodge_cancels_attack_and_starts_next_player_turn():
+    battle = make_battle()
+    battle.player.energy = 2
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+
+    result = battle.respond("dodge")
+
+    assert result.ok is True
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.round_number == 2
+    assert battle.player.hp == 32
+    assert battle.player.energy == 3
+    assert all(card["key"] != "dodge" for card in battle.hand)
+    assert "dodge" in battle.discard_pile
+    assert "玩家使用【闪避】，抵消了本次伤害" in battle.log
+
+
+def test_passing_response_resolves_damage_with_shield_first():
+    battle = make_battle()
+    battle.player.energy = 2
+    battle.player.shield = 4
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+
+    result = battle.respond("pass")
+
+    assert result.ok is True
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.player.shield == 0
+    assert battle.player.hp == 26
+    assert battle.player.energy == 3
+    assert "电脑使用【重击】，对你造成 10 点伤害" in battle.log
+
+
+def test_enemy_attack_resolves_immediately_without_available_dodge():
+    battle = make_battle()
+    battle.player.energy = 0
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    battle.end_player_turn()
+
+    result = battle.resolve_enemy_turn()
+
+    assert result.ok is True
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.player.hp == 26
+    assert battle.pending_attack is None

@@ -26,7 +26,7 @@
 <p>生命值：{{ battle.player.hp }} / {{ battle.player.max_hp }}</p>
 <p>护盾：{{ battle.player.shield }}</p>
 <p>能量：{{ battle.player.energy }}</p>
-<form method="post" action="{{ url_for('battle_use_skill') }}">
+<form method="post" action="{{ url_for('demo.battle_use_skill') }}">
 <button type="submit"
 {% if not is_player_turn or battle.player.energy < 2 or battle.skill_used_this_turn %}disabled{% endif %}>
 使用技能：{{ battle.hero.skill_name }}（消耗 2 能量）
@@ -48,7 +48,7 @@
 {% elif cards[c.key].effect_type == "heal" %}恢复 {{ cards[c.key].value }} 点生命值
 {% endif %}
 </div>
-<form method="post" action="{{ url_for('battle_play_card', card_id=c.id) }}">
+<form method="post" action="{{ url_for('demo.battle_play_card', card_id=c.id) }}">
 <button type="submit"
 {% if not is_player_turn or battle.player.energy < cards[c.key].cost %}disabled{% endif %}>
 出牌
@@ -60,11 +60,11 @@
 </section>
 
 <section class="controls">
-<form method="post" action="{{ url_for('battle_end_turn') }}">
+<form method="post" action="{{ url_for('demo.battle_end_turn') }}">
 <button type="submit" {% if not is_player_turn %}disabled{% endif %}>结束回合</button>
 </form>
 {% if is_finished %}
-<a class="btn primary" href="{{ url_for('result_view') }}">查看结果</a>
+<a class="btn primary" href="{{ url_for('demo.result_view') }}">查看结果</a>
 {% endif %}
 </section>
 
