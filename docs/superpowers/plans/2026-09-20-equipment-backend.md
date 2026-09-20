@@ -135,7 +135,8 @@ git commit -m "feat: add equipment cards and gear slots to the participant model
 - 实现要点：`CARDS` 增 `longsword`（长剑）/ `iron_armor`（铁甲），都是 1 费 `effect_type="equip"`、`value=2`；`FIXED_DECK_KEYS` 各追加 1 张，**13 → 15 张**。`ParticipantState` 加 `weapon` / `armor`（`CardDefinition | None`）与 `weapon_used_this_turn` / `armor_used_this_turn`——放在参与者而不是 `Combatant` 上，因为装备是牌的第四个去处，和手牌区、抽牌堆、弃牌堆同类。序列化侧新增 `_equipped_card_from_payload()`：槽里**只认装备牌**，未知 key（`excalibur`）、普通牌（`slash`）、非字符串一律还原成空槽，坏存档不会炸掉整局。旧扁平存档走 `_migrate_legacy_participants()`，不传装备字段即默认空槽，无需改动。
 - 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **174 passed**（Task 6 结束时是 170）。新增 6 个测试：`tests/test_catalog.py` 3 个（牌库 15 张且两种装备各 1 张、装备牌的文案与数值、`len(CARDS) == 8`），`tests/test_session_state.py` 3 个（装备存档往返、旧 payload 缺装备字段读出空槽、槽里塞进非装备 key 读出空槽）。RED→GREEN 走完：实现前 6 个新测试全红，实现后全绿。
 - **证伪了一个预设风险**：计划里写"牌库 +2 张会改变所有固定种子对局的洗牌轨迹，依赖整局轨迹的用例可能漂移，要逐个重新校准"。实测**没有任何一个测试因扩容而失败**——现有用例断言的都是不变量和相对性质（能量增减、牌区守恒），没有一条钉死具体牌序。这条风险从"需要逐个校准"降级为"不需要处理"。
-- **本任务结束时的中间状态（Task 2 才修）**：装备牌现在可以被双方抽到、也可以被打出去，但 `play_card_for()` 还没有装备分支——它会走通用路径**进入弃牌堆**，而 `_apply_card_effect()` 对 `equip` 类型不做任何事。也就是说此刻打出一张装备牌 = 花 1 点能量、牌进弃牌堆、什么都不发生。电脑也一样（`ENEMY_UNUSABLE_EFFECTS` 仍然只排除闪避，AI 会把装备牌当普通候选打掉）。**这是 TDD 分步的正常中间态，不是可交付状态**；Task 2 补齐结算、Task 3 才让 AI 学会正确估值。
+- **本任务结束时的中间状态（Task 2 才修）**：装备牌现在可以被双方抽到、也可以被打出去，但 `play_card_for()` 还没有装备分支——它会走通用路径**进入弃牌堆**，而 `_apply_card_effect()` 对 `equip` 类型不做任何事。也就是说此刻打出一张装备牌 = 花 1 点能量、牌进弃牌堆、什么都不发生。**这是 TDD 分步的正常中间态，不是可交付状态**；Task 2 补齐结算、Task 3 才让 AI 学会正确估值。
+- **订正（Task 2 实施时实测）**：上面写"AI 会把装备牌当普通候选打掉"是**错的**。装备确实是候选（`ENEMY_UNUSABLE_EFFECTS` 只排除闪避），但 `_base_score()` 对 `effect_type == "equip"` 没有分支、返回 `0.0`，输给 `score_pass()` 的 `0.5`；`_select()` 的 `usable` 池又是"分数严格高于空过"，装备永远进不去。实测 12 个种子、电脑手上只有一长一甲时：12/12 都是空过，装备原封不动留在手里、能量也没花。真正的问题是**装备变成电脑手里永远打不出去的死牌**，会一直占着手牌位（上限 6）直到 Task 3 给它定价。
 - 结构说明：`EQUIP_SLOTS`（装备 key → 槽位名的映射）曾在实现中加进 `catalog.py`，但它到 Task 2 才有第一个人使用，属于死代码，已删除；Task 2 实现装备分支时再加。
 
 ### Task 2: 装备结算规则、长剑加成与铁甲减伤
@@ -148,7 +149,7 @@ git commit -m "feat: add equipment cards and gear slots to the participant model
 - Consumes: Task 1 的装备字段与两张装备牌。
 - Produces: 装备结算分支、统一的伤害漏斗 `_deal_damage(attacker, defender, damage)`、带加成的 `PendingAttack.damage`。**不新增门面函数**——装备就是打牌，走现有的 `play_card_for()`。
 
-- [ ] **Step 1: 写装备流程与两个装备效果的失败测试**
+- [x] **Step 1: 写装备流程与两个装备效果的失败测试**
 
 ```python
 def test_equipping_moves_the_card_into_the_slot_without_discarding_it():
@@ -178,39 +179,39 @@ def test_armor_reduces_hero_skill_damage_too():
 
 还要覆盖：装备不合法时的拒绝（能量不足、不是自己的回合）、装备牌不进入响应窗口、长剑加成出现在 `PendingAttack.damage` 里、铁甲在护盾之前结算（护盾 + 铁甲同时存在时的分配）。
 
-- [ ] **Step 2: 运行测试，确认装备现在还只能当普通牌打掉**
+- [x] **Step 2: 运行测试，确认装备现在还只能当普通牌打掉**
 
 Run: `pytest tests/test_battle.py -q`
 
 Expected: 新增断言失败，装备牌现在会走通用路径进弃牌堆。
 
-- [ ] **Step 3: 实现装备分支**
+- [x] **Step 3: 实现装备分支**
 
 `play_card_for()` 在扣完能量、把手牌 pop 出来之后、进弃牌堆之前加一个 `effect_type == "equip"` 分支：按 `definition.key` 决定进 `weapon` 还是 `armor` 槽，**不进弃牌堆**，写入日志，早期返回。弃牌那一行（现在对所有牌无条件执行，`game/battle.py:245`）要挪到分支之后。**不新增门面函数**：装备就是打牌，测试也用 `play_card()`。
 
-- [ ] **Step 4: 让长剑加成进入挂起的伤害**
+- [x] **Step 4: 让长剑加成进入挂起的伤害**
 
 `_open_response()` 增加一个 `damage` 参数（默认取 `definition.value`）。`play_card_for()` 的伤害分支在调用它之前算出加成：如果攻击方装了长剑、本回合还没用过、且打的是 `slash`，就 `damage += weapon.value` 并把 `weapon_used_this_turn` 置 `True`。加成后的数值同时用于 `PendingAttack.damage`、日志文案和伤害结算——**响应窗口显示的数字必须是玩家真正要挨的数字**。
 
 顺带修掉 `_take_pending_attack()`：它现在传的是 `CARDS[pending.card_key]`，会把加成丢掉，要改成用 `pending.damage`。
 
-- [ ] **Step 5: 建立统一的伤害漏斗与铁甲减伤**
+- [x] **Step 5: 建立统一的伤害漏斗与铁甲减伤**
 
 把 `_resolve_damage()` 改造成 `_deal_damage(attacker, defender, damage)`：先看防御方有没有铁甲且本回合没用过，有就 `damage = max(0, damage - armor.value)` 并置标记，然后调 `apply_damage()`。`_take_pending_attack()`、`_open_response()` 的无法响应分支、以及 `use_skill_for()` 的两处技能伤害全部改走这个漏斗——这是铁甲能覆盖技能伤害的唯一办法。
 
 `start_turn()` 里连同技能标记一起重置该方的 `weapon_used_this_turn` 和 `armor_used_this_turn`。
 
-- [ ] **Step 6: 把三区守恒不变量扩成四区**
+- [x] **Step 6: 把三区守恒不变量扩成四区**
 
 `tests/test_battle.py` 的随机对局不变量现在断言「手牌 + 抽牌堆 + 弃牌堆 == 整副牌库」。装备槽是第四个去处，要把双方 `weapon` / `armor` 的 key 一起加进 `Counter`，语义变成「手牌 + 抽牌堆 + 弃牌堆 + 装备槽 == 整副牌库」。
 
-- [ ] **Step 7: 运行测试并重新校准被洗牌轨迹影响的用例**
+- [x] **Step 7: 运行测试并重新校准被洗牌轨迹影响的用例**
 
 Run: `pytest -q`
 
 Expected: 全部通过。**牌库从 13 张变 15 张会改变所有固定种子对局的发牌结果**，`tests/test_acceptance_scenarios.py` 等依赖整局轨迹的用例可能漂移；要逐个确认漂移原因确实是发牌变了，而不是规则写错了，然后重新校准断言。
 
-- [ ] **Step 8: 提交装备结算规则**
+- [x] **Step 8: 提交装备结算规则**
 
 ```bash
 git add game/battle.py tests/test_battle.py tests/test_acceptance_scenarios.py
@@ -219,7 +220,19 @@ git commit -m "feat: settle equipment effects for both sides"
 
 **验收记录（Task 2）**
 
-（实施后填写）
+- 实际改动文件：`game/battle.py`、`game/catalog.py`、`tests/test_battle.py`、`tests/test_catalog.py`。比计划多两个：`catalog.py` 里加回 `EQUIP_SLOTS`（Task 1 记过"Task 2 再加"）和新增 `LONGSWORD_BOOST_KEYS = frozenset({"slash"})`——决策 7 的"只强化斩击"是一条规则，放在牌表旁边比写死在 `battle.py` 的条件里更容易被下一次改数值时看见；`tests/test_catalog.py` 加一条 `EQUIP_SLOTS` 与牌表里 `effect_type == "equip"` 的集合必须一致的守卫，因为 `_equip()` 是直接查这张表的。
+- 实现要点：
+  - `play_card_for()` 在扣能量、pop 手牌之后、进弃牌堆之前插入 `equip` 分支，早期返回；`discard_pile.append()` 那行挪到分支之后。装备走 `_equip()` → `setattr(participant, EQUIP_SLOTS[key], definition)`。
+  - 新增 `_attack_damage(attacker, definition)`：长剑 + 本回合未用 + 打的是斩击，三者同时成立才 `+2` 并置标记。它在 `_open_response()` 里调用，所以**加成只算一次**，同时决定了 `PendingAttack.damage`、日志数字和实际伤害。
+  - 新增 `_deal_damage(defender, damage)` 作为唯一伤害漏斗：铁甲先减伤（`max(0, damage - 2)`，命中即置标记），再调 `apply_damage()` 走护盾优先。`use_skill_for()` 的 `damage` / `damage_draw` 两处技能伤害、`_resolve_damage()` 全部改走它。返回值是**减伤后、护盾吸收前**的数字，日志按它报伤害——和原先"日志报打出值、护盾另算"的口径一致。
+  - `_take_pending_attack()` 改用 `pending.damage`，不再回查 `CARDS[pending.card_key]`。
+  - `_format_card_log()` 增加 `dealt` 参数（仅伤害牌使用，缺省仍取 `definition.value`）。
+  - `start_turn()` 连同 `skill_used_this_turn` 一起重置 `weapon_used_this_turn` / `armor_used_this_turn`。
+- **与计划的一处偏离**：计划写的漏斗签名是 `_deal_damage(attacker, defender, damage)`，实现成 `_deal_damage(defender, damage) -> int`。攻击方不参与任何减伤逻辑，留着就是死参数；同时调用方需要"减伤后、护盾前"的数字来写日志，所以让它把 `damage` 返回出来。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **193 passed**（Task 1 结束时 174），连跑 3 轮稳定。新增 19 个测试：`tests/test_battle.py` 18 个、`tests/test_catalog.py` 1 个。RED→GREEN：实现前 13 个新用例失败，另外 5 个（能量不足拒绝、非本方回合拒绝、装备不进响应窗口、长剑不影响重击、被闪避不消耗铁甲）当时就已经成立，作为回归守卫留着。
+- **第二个被证伪的预设风险**：计划 Step 7 写"牌库 13→15 张会改变所有固定种子对局的发牌结果，`tests/test_acceptance_scenarios.py` 等依赖整局轨迹的用例可能漂移"。实测**一条都没漂移**，不需要重新校准任何断言——和 Task 1 的结论一致：现有用例断言的是不变量与相对性质，没有一条钉死牌序。这个风险第二次出现在计划里，应视为已关闭，Task 4 不再重复预留校准时间。
+- **四区不变量不是空转**：`assert_consistent()` 扩成四区后，用随机策略探针跑 60 局，实际打出长剑 67 次、铁甲 67 次——装备槽确实被填上过，守恒断言有真实覆盖面，不是"永远为空的第四项"。
+- **本任务结束时的中间状态（Task 3 才修）**：玩家一侧的装备已经完全可用；电脑一侧只是"不会用"——装备进不了它的评分池（`_base_score` 返回 0.0，输给空过 0.5），所以实测 12/12 个种子都选择空过，装备卡死在电脑手牌里占位。这是 Task 3 的直接输入。
 
 ### Task 3: 让 AI 会装备
 
