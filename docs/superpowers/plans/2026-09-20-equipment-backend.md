@@ -245,7 +245,7 @@ git commit -m "feat: settle equipment effects for both sides"
 - Consumes: Task 1 的装备字段、Task 2 的装备结算。
 - Produces: 带装备字段的 `PublicParticipantState`、`score_equip()`、计入长剑的 `score_damage()`、计入铁甲的 `estimate_player_threat()`。
 
-- [ ] **Step 1: 写 AI 装备决策的失败测试**
+- [x] **Step 1: 写 AI 装备决策的失败测试**
 
 ```python
 def test_enemy_offers_an_equipment_card_as_a_normal_candidate():
@@ -268,33 +268,33 @@ def test_gear_on_an_opponent_is_public_information():
     # 观察视图里能读到对手装了什么，但读不到对手手牌。
 ```
 
-- [ ] **Step 2: 运行测试，确认 AI 现在完全不知道装备存在**
+- [x] **Step 2: 运行测试，确认 AI 现在完全不知道装备存在**
 
 Run: `pytest tests/test_ai.py -q`
 
 Expected: 新增断言因观察视图没有装备字段而失败。
 
-- [ ] **Step 3: 把装备放进观察视图**
+- [x] **Step 3: 把装备放进观察视图**
 
 `PublicParticipantState` 增加装备相关字段，`BattleState.enemy_observation()` 填充它们。**同步更新 `tests/test_ai.py` 里那份逐字钉死的字段集合清单**——这份测试的用意是"观察视图里没有藏着对手手牌的位置"，加公开的装备字段是它的设计允许的，但清单必须手动跟进，这样任何一次字段变动都必须是有意识的。
 
-- [ ] **Step 4: 给装备定价**
+- [x] **Step 4: 给装备定价**
 
 新增 `score_equip()`。长剑的估值取"手上还有几张斩击 × 加成值"（封顶 2 张的量，因为它每回合只能触发一次），铁甲的估值取"减伤值 × 当前失血风险系数"，复用 `score_heal()` 已经在用的那个风险系数口径，避免又造一套。装备是跨回合收益，`score_pass()` 的"留能量给闪避"加分逻辑不受影响。
 
 注意 `ActionCandidate.kind` **不新增类型**：装备就是打牌，沿用现有的 `"card"`，`_run_enemy_actions()` 一行都不用改。
 
-- [ ] **Step 5: 让长剑和铁甲进入现有评分**
+- [x] **Step 5: 让长剑和铁甲进入现有评分**
 
 `score_damage()` 在计算斩击伤害时计入长剑加成（与自己回合内是否已触发保持一致）；`estimate_player_threat()` 在对手装铁甲时把威胁上界减 2。威胁估算仍然只看公开信息，不许因此去读玩家手牌。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 电脑会主动装备、不会重复装备、装了长剑之后更愿意打斩击、装了铁甲之后更保守。
 
-- [ ] **Step 7: 提交 AI 装备决策**
+- [x] **Step 7: 提交 AI 装备决策**
 
 ```bash
 git add game/ai.py game/battle.py tests/test_ai.py
@@ -303,7 +303,18 @@ git commit -m "feat: teach the AI to value and use equipment"
 
 **验收记录（Task 3）**
 
-（实施后填写）
+- 实际改动文件：`game/ai.py`、`game/battle.py`、`tests/test_ai.py`，与计划一致。
+- 实现要点：
+  - `PublicParticipantState` 加 `weapon_key` / `armor_key` / `weapon_used_this_turn` / `armor_used_this_turn` 四个字段，`_public_participant()` 填充。`tests/test_ai.py` 那份逐字钉死的字段清单同步更新并注明"装备挂在身上是公开信息"，边界仍然是"装不下对手手牌"。
+  - `score_equip()`：武器按 `min(手里吃加成的牌数, WEAPON_EATERS_PER_TURN) × 加成值` 计价，护甲按 `减伤值 × _risk_multiplier(自己)`。`_base_score()` 加 `equip` 分支；`ActionCandidate.kind` 不新增类型，`_run_enemy_actions()` 一行未改。
+  - `_damage_with_weapon()` 让 `score_damage()` 与结算口径对齐（长剑加成只在没触发过时计入，用掉即回落）；`_after_own_armor()` 让 `estimate_player_threat()` 把自己身上还没用掉的铁甲从威胁上界里减掉。
+- **计划里没有、实施中补的一个口径漏洞**：`score_dodge()` 读的是含长剑加成的 `pending.damage`，却整段绕过了铁甲——会以为自己要挨 10 点（护盾吸 4 → 救回 6），实际放弃响应只会掉 4 点，于是高估闪避的价值。补了 `test_dodge_scores_only_what_the_armor_would_let_through`，并单独验证过它在旧口径下确实变红（旧公式 6.0、新公式 4.0），不是写完就绿的假测试。
+- **与计划的两处偏离**：
+  1. 计划 Step 1 里的 `test_enemy_never_re_offers_gear_it_already_wears` **没有实现**，因为它描述的是一个到不了的状态：每种装备只有 1 张，装上之后那张牌永远在槽里、不会回到手牌，所以"手上又出现一张同名装备"根本不可能发生——这条和 Task 1 已经判死的"替换 / 同名拒绝"是同一族死代码。真正阻止重复装备的机制是"牌已经不在手上了"，不需要额外代码。
+  2. 计划 Step 5 写的"`estimate_player_threat()` 在**对手**装铁甲时把威胁上界减 2"字面上说不通：玩家的铁甲不会减少玩家打出的伤害。按计划自己的用例描述（"电脑装上铁甲后，对玩家下回合伤害上界的估计下降 2 点"）实现成了**自己**身上的铁甲。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **205 passed**（Task 2 结束时 193），连跑 3 轮稳定。新增 12 个测试（全在 `tests/test_ai.py`）。RED→GREEN：实现前 9 个失败，另外 3 个（装备作为 `kind="card"` 候选、没斩击时武器评分为 0、已用掉的铁甲不减威胁）当时就成立，作为回归守卫留着。
+- **实测电脑真的会装备**（200 局/难度，随机玩家策略 + 电脑 AI）：出现过电脑装备的对局 **简单 43% / 中等 34% / 困难 26.5%**；其中铁甲 64 / 54 / 41 次，长剑只有 31 / 20 / 13 次。长剑明显偏少的原因是它在数学上很难赢过直接打斩击：手里 1 张斩击时武器值 2.0 分，而那张斩击自己至少值 2.4 分（面对 12 点护盾的极端值），只有攒到 2 张斩击（4.0 分）时装备才排到第一。**难度越高装备越少**也不是 bug：困难模式是确定性的 top-1，中等难度会给第二顺位 12% 的权重，长剑偶尔从这里被选中。这是"电脑按自己的估值理性地少穿剑"，不是"不会穿"；是否要给它加权重属于数值问题，留给 Task 4 的平衡探针一起看。
+- 本任务结束时的中间状态：玩家和电脑都已经能用装备，规则内核完成；剩下的是公开 JSON 状态与文档（Task 4）。
 
 ### Task 4: 公开状态、文档与验收
 
