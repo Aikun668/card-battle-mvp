@@ -263,6 +263,7 @@ class BattleState:
             if action.kind == "pass":
                 break
             self._play_enemy_card(action.card_id)
+            self._check_terminal()
         return self._complete_enemy_turn()
 
     def _resume_enemy_turn(self) -> ActionResult:

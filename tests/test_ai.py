@@ -356,6 +356,26 @@ def test_enemy_stops_playing_once_energy_runs_out():
     assert all("斩击" not in entry for entry in battle.log)
 
 
+def test_enemy_stops_playing_the_moment_the_player_dies():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.hand = []
+    battle.player.hp = 6
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-heavy", "key": "heavy_strike"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    assert battle.phase is BattlePhase.DEFEAT
+    assert battle.player.hp == 0
+    assert battle.round_number == 1
+    # 6 点生命时斩击就能击杀，比 10 点伤害的重击更省能量，所以只出一张牌。
+    assert battle.log[-1] == "电脑使用【斩击】，对你造成 6 点伤害"
+    assert sum(1 for entry in battle.log if entry.startswith("电脑使用")) == 1
+
+
 def test_enemy_energy_starts_fresh_every_enemy_turn():
     battle = make_battle()
     battle.ai_difficulty = AIDifficulty.HARD
