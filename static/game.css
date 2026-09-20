@@ -217,5 +217,11 @@ button:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 4p
 .hero-option:hover, .hero-option.is-selected { transform: translateY(-3px); border-color: var(--gold-bright); background: #29354b; }
 .hero-option strong { font-family: "STSong", "Noto Serif SC", serif; font-size: 19px; }
 .hero-option span, .hero-option small { color: var(--muted); font-size: 12px; }
+.difficulty-picker { margin: 0 0 22px; }
+.difficulty-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.difficulty-option { min-height: 62px; display: grid; align-content: center; gap: 4px; border: 1px solid #4e4a46; color: var(--paper); background: #18243a; cursor: pointer; font-family: "STSong", "Noto Serif SC", serif; font-size: 16px; transition: transform .2s ease, border-color .2s ease, background-color .2s ease; }
+.difficulty-option:hover, .difficulty-option.is-selected { transform: translateY(-3px); border-color: var(--gold-bright); background: #29354b; }
+.difficulty-option small { color: var(--muted); font-family: inherit; font-size: 12px; }
+.difficulty-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .primary-action { min-width: 190px; padding: 14px 26px; font-family: "STSong", "Noto Serif SC", serif; font-size: 18px; }
 .primary-action:disabled { opacity: .4; cursor: not-allowed; }

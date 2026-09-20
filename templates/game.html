@@ -17,7 +17,7 @@
     <div class="combatant-summary">
       <div class="name-line">
         <h1 id="enemy-name">电脑</h1>
-        <span class="eyebrow">AI 对手</span>
+        <span class="eyebrow" id="enemy-difficulty">AI 对手</span>
       </div>
       <div class="health-line">
         <div class="health-track"><span id="enemy-health-fill"></span></div>
@@ -127,6 +127,15 @@
       <h2>选择你的角色</h2>
       <p>每回合 3 点能量，在攻击、防守和治疗之间做出决定。</p>
       <div class="hero-options" id="hero-options"></div>
+      <div class="difficulty-picker">
+        <span class="eyebrow">电脑难度</span>
+        <div class="difficulty-options" id="difficulty-options" role="radiogroup" aria-label="电脑难度">
+          <button class="difficulty-option" type="button" data-difficulty="easy" aria-pressed="false">简单<small>选牌更随意</small></button>
+          <button class="difficulty-option is-selected" type="button" data-difficulty="medium" aria-pressed="true">中等<small>默认难度</small></button>
+          <button class="difficulty-option" type="button" data-difficulty="hard" aria-pressed="false">困难<small>会预判斩杀</small></button>
+        </div>
+        <p class="difficulty-note">三档难度使用完全相同的卡牌数值、生命值与能量规则。</p>
+      </div>
       <button class="primary-action" id="start-game" type="button" disabled>开始战斗</button>
     </div>
   </section>

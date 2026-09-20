@@ -40,6 +40,7 @@ def public_battle_state(battle: BattleState) -> dict:
     return {
         "phase": battle.phase.value,
         "round_number": battle.round_number,
+        "ai_difficulty": battle.ai_difficulty.value,
         "hero": _hero_to_dict(battle.hero),
         "player": _combatant_to_dict(battle.player),
         "enemy": _combatant_to_dict(battle.enemy),

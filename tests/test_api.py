@@ -97,6 +97,49 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     assert after_turn["player"]["energy"] == 3
 
 
+def test_create_game_defaults_to_medium_ai_difficulty(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.post("/api/game", json={"hero_key": "mage"})
+
+    assert response.status_code == 201
+    assert response.get_json()["data"]["ai_difficulty"] == "medium"
+
+
+def test_create_game_accepts_an_explicit_ai_difficulty(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/api/game", json={"hero_key": "mage", "ai_difficulty": "hard"}
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["data"]["ai_difficulty"] == "hard"
+
+
+def test_create_game_rejects_an_unknown_ai_difficulty(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/api/game", json={"hero_key": "mage", "ai_difficulty": "nightmare"}
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "INVALID_DIFFICULTY"
+
+
+def test_ai_difficulty_survives_reads_and_enemy_turns(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior", "ai_difficulty": "easy"})
+
+    assert client.get("/api/game").get_json()["data"]["ai_difficulty"] == "easy"
+
+    after_turn = client.post("/api/game/actions/end-turn").get_json()["data"]
+    assert after_turn["ai_difficulty"] == "easy"
+
+
 def test_api_rejects_actions_without_a_live_game(tmp_path):
     client = make_client(tmp_path)
 

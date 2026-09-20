@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request, session
 
 from game.battle import BattleState
 from game.catalog import CARDS, HEROES
+from game.models import AIDifficulty
 from game.public_state import public_battle_state
 from game.session_state import clear_battle, load_battle, save_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
@@ -74,7 +75,13 @@ def create_api_blueprint() -> Blueprint:
         hero_key = payload.get("hero_key")
         if hero_key not in HEROES:
             return error_response("INVALID_HERO", "请选择有效角色", status=422)
-        battle = BattleState.create(hero_key, random.Random())
+        difficulty_value = payload.get("ai_difficulty", AIDifficulty.MEDIUM.value)
+        ai_difficulty = AIDifficulty.parse(difficulty_value)
+        if ai_difficulty is None:
+            return error_response(
+                "INVALID_DIFFICULTY", "请选择有效的电脑难度", status=422
+            )
+        battle = BattleState.create(hero_key, random.Random(), ai_difficulty)
         session.pop(RESULT_SAVED_KEY, None)
         save_battle(session, battle)
         return response(public_battle_state(battle), status=201)

@@ -18,6 +18,13 @@ class AIDifficulty(str, Enum):
     MEDIUM = "medium"
     HARD = "hard"
 
+    @classmethod
+    def parse(cls, value: object) -> "AIDifficulty | None":
+        """把外部传入的难度值转成枚举，无法识别时返回 None。"""
+        if isinstance(value, str) and value in {item.value for item in cls}:
+            return cls(value)
+        return None
+
 
 @dataclass(frozen=True)
 class CardDefinition:

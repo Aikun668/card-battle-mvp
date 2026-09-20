@@ -1,6 +1,6 @@
 """End-to-end acceptance scenarios mirroring docs/claude-builder/acceptance.md §6.
 
-A single linear test exercises the ten manual scenarios in order so they
+A single linear test exercises the eleven manual scenarios in order so they
 share the same Flask session. We use the test client because urllib cannot
 reliably preserve Flask flash state across POST→302→GET.
 """
@@ -83,17 +83,26 @@ def test_acceptance_walk_through():
     with client.session_transaction() as s:
         assert s["battle"]["player"]["shield"] == first_shield
 
-    # Scenario 7 — end-turn runs exactly one enemy action
+    # Scenario 7 — end-turn runs the enemy turn until nothing is worth playing
     with client.session_transaction() as s:
         s["battle"]["round_number"] = 1
-        s["battle"]["enemy_hand"] = [{"id": "e-s", "key": "slash"}]
+        s["battle"]["enemy_hand"] = [
+            {"id": "e-s1", "key": "slash"},
+            {"id": "e-s2", "key": "slash"},
+        ]
         s["battle"]["enemy"]["shield"] = 0
         s["battle"]["player"]["shield"] = 0
         s["battle"]["player"]["hp"] = 32
+        s["battle"]["log"] = []
         s.modified = True
     client.post("/demo/battle/end-turn", follow_redirects=True)
     with client.session_transaction() as s:
-        assert s["battle"]["player"]["hp"] == 26
+        # 电脑每打完一张牌都重新评分，能量允许时连出两张斩击。
+        assert (
+            sum(1 for entry in s["battle"]["log"] if entry.startswith("电脑使用")) == 2
+        )
+        assert s["battle"]["player"]["hp"] == 20
+        assert s["battle"]["enemy"]["energy"] == 1
         assert s["battle"]["phase"] == "PLAYER_TURN"
         assert s["battle"]["round_number"] == 2
         assert s["battle"]["player"]["energy"] == 3
@@ -135,3 +144,26 @@ def test_acceptance_walk_through():
     r2 = client.get("/demo/battle")
     assert r2.status_code == 302
     assert r2.headers["Location"].endswith("/demo/heroes")
+
+    # Scenario 11 — difficulty is chosen before the game, then shown on the page
+    page = client.get("/demo").get_data(as_text=True)
+    for needle in ('id="difficulty-options"', "简单", "中等", "困难"):
+        assert needle in page
+    for difficulty in ("easy", "medium", "hard"):
+        created = client.post(
+            "/api/game", json={"hero_key": "warrior", "ai_difficulty": difficulty}
+        )
+        assert created.status_code == 201
+        assert created.get_json()["data"]["ai_difficulty"] == difficulty
+        assert client.get("/api/game").get_json()["data"]["ai_difficulty"] == difficulty
+    assert (
+        client.post("/api/game", json={"hero_key": "warrior"}).get_json()["data"][
+            "ai_difficulty"
+        ]
+        == "medium"
+    )
+    rejected = client.post(
+        "/api/game", json={"hero_key": "warrior", "ai_difficulty": "nightmare"}
+    )
+    assert rejected.status_code == 422
+    assert rejected.get_json()["error"]["code"] == "INVALID_DIFFICULTY"

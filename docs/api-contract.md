@@ -42,11 +42,11 @@
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| `POST` | `/api/game` | 使用 `hero_key` 创建新对局 |
+| `POST` | `/api/game` | 使用 `hero_key` 创建新对局，可选 `ai_difficulty` |
 | `GET` | `/api/game` | 获取当前对局的公开状态 |
 | `POST` | `/api/game/actions/card` | 使用 `card_id` 出牌 |
 | `POST` | `/api/game/actions/skill` | 使用角色技能 |
-| `POST` | `/api/game/actions/end-turn` | 结束玩家回合并执行一次电脑行动 |
+| `POST` | `/api/game/actions/end-turn` | 结束玩家回合，电脑按能量连续行动后进入下一回合 |
 | `POST` | `/api/game/restart` | 清除当前对局 |
 
 创建对局：
@@ -54,9 +54,12 @@
 ```json
 POST /api/game
 {
-  "hero_key": "warrior"
+  "hero_key": "warrior",
+  "ai_difficulty": "medium"
 }
 ```
+
+`ai_difficulty` 可选值为 `easy`、`medium`、`hard`，省略时为 `medium`。它只改变电脑的决策质量与随机性，不改变卡牌数值、生命值、能量或抽牌规则。非法取值返回 `INVALID_DIFFICULTY`。
 
 成功的对局接口返回：
 
@@ -66,6 +69,7 @@ POST /api/game
   "data": {
     "phase": "PLAYER_TURN",
     "round_number": 1,
+    "ai_difficulty": "medium",
     "hero": {},
     "player": {},
     "enemy": {},
@@ -102,6 +106,7 @@ POST /api/game
 当前主要错误码：
 
 - `INVALID_HERO`：角色不存在；
+- `INVALID_DIFFICULTY`：电脑难度不是 `easy`、`medium`、`hard`；
 - `INVALID_REQUEST`：请求字段缺失或格式错误；
 - `NO_ACTIVE_GAME`：当前没有进行中的对局；
 - `ACTION_REJECTED`：战斗规则拒绝了本次操作。

@@ -110,6 +110,23 @@ def test_enemy_response_contract_is_declared():
     assert ".response-panel" in styles
 
 
+def test_ai_difficulty_selector_contract_is_declared():
+    template = (PROJECT_ROOT / "templates" / "game.html").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "static" / "game.js").read_text(encoding="utf-8")
+    styles = (PROJECT_ROOT / "static" / "game.css").read_text(encoding="utf-8")
+
+    assert 'id="difficulty-options"' in template
+    assert 'data-difficulty="easy"' in template
+    assert 'data-difficulty="medium"' in template
+    assert 'data-difficulty="hard"' in template
+    assert 'id="enemy-difficulty"' in template
+
+    assert "selectedDifficulty" in script
+    assert "ai_difficulty: selectedDifficulty" in script
+    assert "difficultyLabels[state.ai_difficulty]" in script
+    assert ".difficulty-option" in styles
+
+
 def test_response_panel_layer_sits_above_player_zone():
     styles = (PROJECT_ROOT / "static" / "game.css").read_text(encoding="utf-8")
 

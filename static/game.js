@@ -28,11 +28,18 @@ const outcomeLabels = {
   DRAW: "平局",
 };
 
+const difficultyLabels = {
+  easy: "简单",
+  medium: "中等",
+  hard: "困难",
+};
+
 const refs = {
   shell: document.getElementById("game-shell"),
   startOverlay: document.getElementById("start-overlay"),
   resultOverlay: document.getElementById("result-overlay"),
   heroOptions: document.getElementById("hero-options"),
+  difficultyOptions: document.getElementById("difficulty-options"),
   startGame: document.getElementById("start-game"),
   restartGame: document.getElementById("restart-game"),
   hand: document.getElementById("hand"),
@@ -51,6 +58,7 @@ const DESIGN_WIDTH = 1920;
 const DESIGN_HEIGHT = 1080;
 
 let selectedHero = null;
+let selectedDifficulty = "medium";
 let currentState = null;
 let toastTimer = null;
 let previewedCardId = null;
@@ -236,6 +244,10 @@ function renderState(state) {
   setText("phase-label", phase[0]);
   setText("phase-hint", phase[1]);
   setText("enemy-name", state.enemy.name);
+  setText(
+    "enemy-difficulty",
+    `AI 对手 · ${difficultyLabels[state.ai_difficulty] || state.ai_difficulty}`,
+  );
   setText("player-name", state.hero.name);
   setHealth("enemy", state.enemy);
   setHealth("player", state.player);
@@ -305,13 +317,25 @@ function renderHeroes(heroes) {
   });
 }
 
+function selectDifficulty(button) {
+  selectedDifficulty = button.dataset.difficulty;
+  refs.difficultyOptions.querySelectorAll(".difficulty-option").forEach((item) => {
+    const isSelected = item === button;
+    item.classList.toggle("is-selected", isSelected);
+    item.setAttribute("aria-pressed", String(isSelected));
+  });
+}
+
 async function beginGame() {
   if (!selectedHero) return;
   refs.startGame.disabled = true;
   try {
     const payload = await requestJson("/api/game", {
       method: "POST",
-      body: JSON.stringify({ hero_key: selectedHero }),
+      body: JSON.stringify({
+        hero_key: selectedHero,
+        ai_difficulty: selectedDifficulty,
+      }),
     });
     refs.startOverlay.classList.add("is-hidden");
     renderState(payload.data);
@@ -395,6 +419,10 @@ async function initialise() {
   }
 }
 
+refs.difficultyOptions.addEventListener("click", (event) => {
+  const button = event.target.closest(".difficulty-option");
+  if (button) selectDifficulty(button);
+});
 refs.startGame.addEventListener("click", beginGame);
 refs.restartGame.addEventListener("click", restartGame);
 refs.skillButton.addEventListener("click", useSkill);
