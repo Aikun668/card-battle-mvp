@@ -2,7 +2,14 @@ import random
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from game.catalog import CARDS, HEROES, SKILL_COST, STARTING_ENERGY
+from game.catalog import (
+    CARDS,
+    EQUIP_SLOTS,
+    HEROES,
+    LONGSWORD_BOOST_KEYS,
+    SKILL_COST,
+    STARTING_ENERGY,
+)
 from game.models import AIDifficulty, CardDefinition, HeroDefinition, PendingAttack
 
 # 闪避只能在响应时机使用，不进入主动出牌候选。
@@ -19,6 +26,8 @@ SHIELD_BREAK_WEIGHT = 0.4
 SHIELD_SCALE = 12.0
 # 平方增长：失血越多，治疗与护盾的边际价值上升越快，濒死时自然转向自保。
 RISK_WEIGHT = 6.0
+# 武器一回合只加成一次，手里再多能吃加成的牌也只按两张计价。
+WEAPON_EATERS_PER_TURN = 2
 # 困难模式发现玩家下回合能击杀自己时，对非防御行动的扣分。
 DANGER_PENALTY = 100.0
 
@@ -35,9 +44,10 @@ DIFFICULTY_SELECTION: dict[AIDifficulty, tuple[float, ...]] = {
 
 @dataclass(frozen=True)
 class PublicParticipantState:
-    """牌桌上一方看得见的状态：只有血条、护盾、能量、英雄和技能是否已用。
+    """牌桌上一方看得见的状态：血条、护盾、能量、英雄，以及身上的装备。
 
-    手牌、抽牌堆以及它们的顺序都不在这里——它们不属于公开信息。
+    手牌、抽牌堆以及它们的顺序都不在这里——它们不属于公开信息；装备挂在
+    角色身上是谁都看得见的东西，所以它属于这一侧。
     """
 
     hero_key: str
@@ -46,6 +56,10 @@ class PublicParticipantState:
     shield: int
     energy: int
     skill_used_this_turn: bool
+    weapon_key: str | None = None
+    armor_key: str | None = None
+    weapon_used_this_turn: bool = False
+    armor_used_this_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,14 +129,41 @@ def _risk_multiplier(public_state: PublicParticipantState) -> float:
 def score_damage(observation: AIObservation, definition: CardDefinition) -> float:
     # 超出剩余生命的部分完全浪费；打在护盾上的部分只算削盾价值，不算生命威胁。
     opponent = observation.opponent_state
-    absorbed = min(definition.value, opponent.shield)
-    effective = definition.value - absorbed
+    damage = _damage_with_weapon(observation, definition)
+    absorbed = min(damage, opponent.shield)
+    effective = damage - absorbed
     useful = min(effective, opponent.hp)
     score = useful + useful / definition.cost * EFFICIENCY_WEIGHT
     score += absorbed * SHIELD_BREAK_WEIGHT
     if effective >= opponent.hp:
         score += LETHAL_BONUS
     return score
+
+
+def _damage_with_weapon(observation: AIObservation, definition: CardDefinition) -> int:
+    """武器的加成口径必须和结算一致：一回合只加一次，用掉之后评分也跟着回落。"""
+    own = observation.self_state
+    if (
+        own.weapon_key is None
+        or own.weapon_used_this_turn
+        or definition.key not in LONGSWORD_BOOST_KEYS
+    ):
+        return definition.value
+    return definition.value + CARDS[own.weapon_key].value
+
+
+def score_equip(observation: AIObservation, definition: CardDefinition) -> float:
+    """装备的收益跨回合，按它眼下能兑现多少价值定价。
+
+    武器按手里还有几张吃加成的牌算，封顶两张——一回合只触发一次，再多也吃不完；
+    护甲按"减伤值 × 当前失血风险"算，与治疗、护盾共用同一个风险系数。
+    """
+    if EQUIP_SLOTS[definition.key] == "weapon":
+        eaters = sum(
+            1 for card in observation.own_hand if card["key"] in LONGSWORD_BOOST_KEYS
+        )
+        return min(eaters, WEAPON_EATERS_PER_TURN) * definition.value
+    return definition.value * _risk_multiplier(observation.self_state)
 
 
 def score_heal(observation: AIObservation, definition: CardDefinition) -> float:
@@ -166,6 +207,8 @@ def _base_score(
         return score_heal(observation, definition)
     if definition.effect_type == "shield":
         return score_shield(observation, definition)
+    if definition.effect_type == "equip":
+        return score_equip(observation, definition)
     return 0.0
 
 
@@ -175,7 +218,8 @@ def estimate_player_threat(observation: AIObservation) -> int:
     公开牌表里买得起的伤害牌一律算作可能，再加上玩家英雄的伤害技能；他手里
     究竟有哪张牌不看。公开弃牌记录也不参与：抽牌堆抽空时弃牌会洗回去，"这张
     已经打掉了"并不能排除它下回合回到玩家手上，拿它收窄上界会低估威胁。
-    玩家的技能次数在轮到自己时会重置，所以这里按"下回合可用"计。
+    玩家的技能次数在轮到自己时会重置，所以这里按"下回合可用"计；自己身上的铁甲
+    同理，本回合还没用掉的就按能挡下 2 点算。
     """
     opponent = observation.opponent_state
     hero = HEROES[opponent.hero_key]
@@ -186,7 +230,13 @@ def estimate_player_threat(observation: AIObservation) -> int:
     ]
     if SKILL_EFFECT_TYPES.get(hero.skill_type) == "damage":
         threats.append(hero.skill_value)
-    return max(threats, default=0)
+    return _after_own_armor(observation.self_state, max(threats, default=0))
+
+
+def _after_own_armor(own: PublicParticipantState, damage: int) -> int:
+    if own.armor_key is None or own.armor_used_this_turn:
+        return damage
+    return max(0, damage - CARDS[own.armor_key].value)
 
 
 def _survivable_hp_after(observation: AIObservation, candidate: ActionCandidate) -> int:
@@ -227,11 +277,15 @@ def score_enemy_action(
 
 
 def score_dodge(observation: AIObservation) -> float:
-    """电脑闪避这次攻击值多少分：救下护盾吸收之后真会掉的生命。"""
+    """电脑闪避这次攻击值多少分：救下护盾吸收之后真会掉的生命。
+
+    伤害口径和结算保持一致：自己的铁甲先削 2 点，护盾再吸，剩下的才算救回来。
+    """
     pending = observation.pending_attack
     own = observation.self_state
-    absorbed = min(own.shield, pending.damage)
-    saved = min(pending.damage - absorbed, own.hp)
+    incoming = _after_own_armor(own, pending.damage)
+    absorbed = min(own.shield, incoming)
+    saved = min(incoming - absorbed, own.hp)
     if saved <= 0:
         return 0.0
     return saved * _risk_multiplier(own)

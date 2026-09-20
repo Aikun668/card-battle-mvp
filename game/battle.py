@@ -619,6 +619,10 @@ def _public_participant(participant: ParticipantState) -> PublicParticipantState
         shield=combatant.shield,
         energy=combatant.energy,
         skill_used_this_turn=participant.skill_used_this_turn,
+        weapon_key=participant.weapon.key if participant.weapon else None,
+        armor_key=participant.armor.key if participant.armor else None,
+        weapon_used_this_turn=participant.weapon_used_this_turn,
+        armor_used_this_turn=participant.armor_used_this_turn,
     )
 
 

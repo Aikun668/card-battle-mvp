@@ -623,6 +623,15 @@ def test_dodge_scores_only_the_damage_that_would_reach_health():
     assert score_dodge(battle.enemy_observation()) == 6.0
 
 
+def test_dodge_scores_only_what_the_armor_would_let_through():
+    battle = battle_with_a_pending_attack(10)
+    battle.enemy.shield = 4
+    enemy_wearing(battle, "iron_armor")
+
+    # 放弃响应的话，这 10 点会先被铁甲削掉 2 点，剩下的才轮到 4 点护盾。
+    assert score_dodge(battle.enemy_observation()) == 4.0
+
+
 def test_dodge_scores_nothing_when_the_shield_absorbs_the_whole_hit():
     battle = battle_with_a_pending_attack(10)
     battle.enemy.shield = 12
@@ -812,6 +821,11 @@ def test_the_observation_types_have_nowhere_to_put_the_opponent_hand_or_deck():
         "shield",
         "energy",
         "skill_used_this_turn",
+        # 装备挂在角色身上，两边都看得见，所以它属于公开状态。
+        "weapon_key",
+        "armor_key",
+        "weapon_used_this_turn",
+        "armor_used_this_turn",
     }
     assert {field.name for field in fields(AIObservation)} == {
         "self_state",
@@ -839,5 +853,176 @@ def test_threat_estimate_never_drops_below_the_public_table_maximum():
     """技能也要算进去（法师火球术 10、游侠连射 6），只是当前都被火球 14 压过。"""
     battle = battle_with_a_dangerous_enemy()
     battle.participants[Side.PLAYER].hero = HEROES["mage"]
+
+    assert estimate_player_threat(battle.enemy_observation()) == CARDS["fireball"].value
+
+
+# --- 装备: AI 决策 ---
+
+
+def enemy_wearing(battle, card_key):
+    """直接给电脑穿上装备：这些用例考的是它的估值，不是打牌流程。"""
+    enemy = battle.participant(Side.ENEMY)
+    if card_key == "longsword":
+        enemy.weapon = CARDS[card_key]
+    else:
+        enemy.armor = CARDS[card_key]
+    return battle
+
+
+def enemy_scores(battle, difficulty=AIDifficulty.MEDIUM):
+    return {
+        candidate.card_id: candidate.score
+        for candidate in rank_enemy_actions(battle.enemy_observation(), difficulty)
+    }
+
+
+def test_enemy_offers_an_equipment_card_as_a_normal_candidate():
+    battle = make_battle()
+    battle.enemy_hand = [{"id": "enemy-sword", "key": "longsword"}]
+
+    candidates = get_available_enemy_actions(battle.enemy_observation())
+
+    sword = next(c for c in candidates if c.card_id == "enemy-sword")
+    # 装备就是打牌，不新增候选类型：_run_enemy_actions() 一行都不用改。
+    assert sword.kind == "card"
+
+
+def test_weapon_score_counts_the_slashes_left_in_hand():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [
+        {"id": "enemy-sword", "key": "longsword"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+
+    assert enemy_scores(battle)["enemy-sword"] == CARDS["longsword"].value
+
+
+def test_weapon_score_is_capped_at_the_one_boost_it_gets_per_turn():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [
+        {"id": "enemy-sword", "key": "longsword"},
+        {"id": "enemy-slash-1", "key": "slash"},
+        {"id": "enemy-slash-2", "key": "slash"},
+        {"id": "enemy-slash-3", "key": "slash"},
+    ]
+
+    # 手里三张斩击，但一回合只加成一次，所以最多按两张计价。
+    assert enemy_scores(battle)["enemy-sword"] == 2 * CARDS["longsword"].value
+
+
+def test_weapon_scores_nothing_when_there_is_no_slash_to_go_with_it():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-sword", "key": "longsword"}]
+
+    # 没有斩击时先攒着：装备要花 1 点能量，空穿等于白花。
+    assert enemy_scores(battle)["enemy-sword"] == 0.0
+    assert (
+        rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)[0].kind
+        == "pass"
+    )
+
+
+def test_armor_is_worth_more_when_the_enemy_is_hurt():
+    def armor_score(battle):
+        return enemy_scores(battle)["enemy-armor"]
+
+    healthy = make_battle()
+    healthy.enemy.energy = 1
+    healthy.enemy_hand = [{"id": "enemy-armor", "key": "iron_armor"}]
+
+    hurt = make_battle()
+    hurt.enemy.energy = 1
+    hurt.enemy.hp = hurt.enemy.max_hp // 4
+    hurt.enemy_hand = [{"id": "enemy-armor", "key": "iron_armor"}]
+
+    assert armor_score(healthy) == CARDS["iron_armor"].value
+    assert armor_score(hurt) > armor_score(healthy)
+
+
+def test_weapon_raises_the_score_of_a_slash_but_not_of_a_fireball():
+    def with_hand(battle):
+        battle.enemy.energy = 3
+        battle.enemy_hand = [
+            {"id": "enemy-slash", "key": "slash"},
+            {"id": "enemy-fireball", "key": "fireball"},
+        ]
+        return battle
+
+    bare = enemy_scores(with_hand(make_battle()))
+    armed = enemy_scores(with_hand(enemy_wearing(make_battle(), "longsword")))
+
+    # 长剑只强化斩击，火球的评分一点都不该动。
+    assert armed["enemy-slash"] > bare["enemy-slash"]
+    assert armed["enemy-fireball"] == bare["enemy-fireball"]
+
+
+def test_a_spent_weapon_no_longer_raises_the_slash_score():
+    battle = enemy_wearing(make_battle(), "longsword")
+    battle.enemy.energy = 3
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    before = enemy_scores(battle)["enemy-slash"]
+
+    battle.participant(Side.ENEMY).weapon_used_this_turn = True
+
+    assert enemy_scores(battle)["enemy-slash"] < before
+
+
+def test_a_full_enemy_turn_can_equip_and_then_cash_in_the_bonus():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.hand = []
+    battle.player.shield = 12
+    battle.end_player_turn()
+    withhold_enemy_skill(battle)
+    battle.enemy_hand = [
+        {"id": "enemy-sword", "key": "longsword"},
+        {"id": "enemy-slash-1", "key": "slash"},
+        {"id": "enemy-slash-2", "key": "slash"},
+    ]
+
+    battle.resolve_enemy_turn()
+
+    assert battle.participant(Side.ENEMY).weapon.key == "longsword"
+    # 先穿剑再出手：8 + 6 = 14 点打穿 12 点护盾，多出的 2 点落在生命上。
+    assert battle.player.shield == 0
+    assert battle.player.hp == 30
+
+
+def test_gear_on_either_side_is_public_in_the_observation():
+    battle = enemy_wearing(make_battle(), "longsword")
+    battle.participant(Side.PLAYER).armor = CARDS["iron_armor"]
+    battle.hand = [{"id": "hidden-fireball", "key": "fireball"}]
+
+    observation = battle.enemy_observation()
+
+    assert observation.self_state.weapon_key == "longsword"
+    assert observation.self_state.armor_key is None
+    assert observation.opponent_state.armor_key == "iron_armor"
+    assert observation.opponent_state.weapon_key is None
+    # 装备是公开信息，但它不能变成偷看对手手牌的后门。
+    assert not hasattr(observation.opponent_state, "hand")
+
+
+def test_armor_reduces_the_estimated_player_threat():
+    battle = make_battle()
+    battle.participant(Side.PLAYER).hero = HEROES["mage"]
+    without_armor = estimate_player_threat(battle.enemy_observation())
+
+    enemy_wearing(battle, "iron_armor")
+
+    assert without_armor == CARDS["fireball"].value
+    assert (
+        estimate_player_threat(battle.enemy_observation())
+        == without_armor - CARDS["iron_armor"].value
+    )
+
+
+def test_a_spent_armor_does_not_lower_the_threat_estimate():
+    battle = enemy_wearing(make_battle(), "iron_armor")
+    battle.participant(Side.ENEMY).armor_used_this_turn = True
 
     assert estimate_player_threat(battle.enemy_observation()) == CARDS["fireball"].value
