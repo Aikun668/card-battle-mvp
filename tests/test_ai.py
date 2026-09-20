@@ -104,6 +104,8 @@ def test_easy_never_picks_an_action_with_no_upside():
 
 def test_hard_lookahead_flips_to_defence_when_the_player_can_kill_next_turn():
     battle = make_battle()
+    # 固定生命上限，"半血恐惧"的评分才不会随本局随机到的电脑英雄漂移。
+    battle.enemy.max_hp = 28
     battle.enemy.hp = 14
     battle.enemy.shield = 0
     battle.enemy.energy = 3

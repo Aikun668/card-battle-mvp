@@ -11,9 +11,16 @@ import sqlite3
 import sys
 import tempfile
 
+from game.catalog import HEROES
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+
+def side_state(session: dict, side: str) -> dict:
+    """读取 session 里某个参与者的原始分区。"""
+    return session["battle"]["participants"][side]
 
 
 def test_acceptance_walk_through():
@@ -40,59 +47,68 @@ def test_acceptance_walk_through():
     for needle in ("生命值", "护盾", "能量", "结束回合", "战斗日志", "当前回合"):
         assert needle in body
     with client.session_transaction() as s:
+        player = side_state(s, "player")
+        enemy = side_state(s, "enemy")
         assert s["battle"]["phase"] == "PLAYER_TURN"
-        assert s["battle"]["player"]["hp"] == 32
-        assert s["battle"]["enemy"]["hp"] == 28
-        assert s["battle"]["player"]["energy"] == 3
-        assert len(s["battle"]["hand"]) == 5
+        assert player["combatant"]["hp"] == 32
+        assert enemy["hero_key"] in HEROES
+        assert enemy["combatant"]["hp"] == enemy["combatant"]["max_hp"]
+        assert player["combatant"]["energy"] == 3
+        assert len(player["hand"]) == 5
 
     # Scenario 4 — normal card play
     with client.session_transaction() as s:
-        s["battle"]["hand"] = [{"id": "p-s", "key": "slash"}]
+        side_state(s, "player")["hand"] = [{"id": "p-s", "key": "slash"}]
+        enemy_hp_before = side_state(s, "enemy")["combatant"]["hp"]
         s.modified = True
     client.post("/demo/battle/card/p-s", follow_redirects=True)
     with client.session_transaction() as s:
-        assert s["battle"]["enemy"]["hp"] == 22
-        assert s["battle"]["player"]["energy"] == 2
-        assert s["battle"]["hand"] == []
+        assert side_state(s, "enemy")["combatant"]["hp"] == enemy_hp_before - 6
+        assert side_state(s, "player")["combatant"]["energy"] == 2
+        assert side_state(s, "player")["hand"] == []
         assert any("斩击" in e for e in s["battle"]["log"])
 
     # Scenario 5 — insufficient energy flash, state unchanged
     with client.session_transaction() as s:
-        s["battle"]["player"]["energy"] = 0
-        s["battle"]["hand"] = [{"id": "p-fb", "key": "fireball"}]
+        player = side_state(s, "player")
+        player["combatant"]["energy"] = 0
+        player["hand"] = [{"id": "p-fb", "key": "fireball"}]
+        enemy_hp_before = side_state(s, "enemy")["combatant"]["hp"]
         s.modified = True
     r = client.post("/demo/battle/card/p-fb", follow_redirects=True)
     assert "能量不足" in r.get_data(as_text=True)
     with client.session_transaction() as s:
-        assert s["battle"]["player"]["energy"] == 0
-        assert s["battle"]["enemy"]["hp"] == 22
-        assert s["battle"]["hand"][0]["id"] == "p-fb"
+        assert side_state(s, "player")["combatant"]["energy"] == 0
+        assert side_state(s, "enemy")["combatant"]["hp"] == enemy_hp_before
+        assert side_state(s, "player")["hand"][0]["id"] == "p-fb"
 
     # Scenario 6 — skill limit per turn
     with client.session_transaction() as s:
-        s["battle"]["player"]["energy"] = 3
-        s["battle"]["player"]["shield"] = 0
-        s["battle"]["skill_used_this_turn"] = False
+        player = side_state(s, "player")
+        player["combatant"]["energy"] = 3
+        player["combatant"]["shield"] = 0
+        player["skill_used_this_turn"] = False
         s.modified = True
     client.post("/demo/battle/skill", follow_redirects=True)
     with client.session_transaction() as s:
-        first_shield = s["battle"]["player"]["shield"]
+        first_shield = side_state(s, "player")["combatant"]["shield"]
     r = client.post("/demo/battle/skill", follow_redirects=True)
     assert "本回合技能已经使用过" in r.get_data(as_text=True)
     with client.session_transaction() as s:
-        assert s["battle"]["player"]["shield"] == first_shield
+        assert side_state(s, "player")["combatant"]["shield"] == first_shield
 
     # Scenario 7 — end-turn runs the enemy turn until nothing is worth playing
     with client.session_transaction() as s:
         s["battle"]["round_number"] = 1
-        s["battle"]["enemy_hand"] = [
+        player = side_state(s, "player")
+        enemy = side_state(s, "enemy")
+        enemy["hand"] = [
             {"id": "e-s1", "key": "slash"},
             {"id": "e-s2", "key": "slash"},
         ]
-        s["battle"]["enemy"]["shield"] = 0
-        s["battle"]["player"]["shield"] = 0
-        s["battle"]["player"]["hp"] = 32
+        enemy["combatant"]["shield"] = 0
+        player["combatant"]["shield"] = 0
+        player["combatant"]["hp"] = 32
         s["battle"]["log"] = []
         s.modified = True
     client.post("/demo/battle/end-turn", follow_redirects=True)
@@ -101,11 +117,11 @@ def test_acceptance_walk_through():
         assert (
             sum(1 for entry in s["battle"]["log"] if entry.startswith("电脑使用")) == 2
         )
-        assert s["battle"]["player"]["hp"] == 20
-        assert s["battle"]["enemy"]["energy"] == 1
+        assert side_state(s, "player")["combatant"]["hp"] == 20
+        assert side_state(s, "enemy")["combatant"]["energy"] == 1
         assert s["battle"]["phase"] == "PLAYER_TURN"
         assert s["battle"]["round_number"] == 2
-        assert s["battle"]["player"]["energy"] == 3
+        assert side_state(s, "player")["combatant"]["energy"] == 3
 
     # Scenario 8 — page refresh does not re-trigger the last action
     state_before = None
@@ -119,8 +135,8 @@ def test_acceptance_walk_through():
 
     # Scenario 9 — terminal state blocks further actions, writes one row
     with client.session_transaction() as s:
-        s["battle"]["enemy"]["hp"] = 1
-        s["battle"]["hand"] = [{"id": "p-kill", "key": "slash"}]
+        side_state(s, "enemy")["combatant"]["hp"] = 1
+        side_state(s, "player")["hand"] = [{"id": "p-kill", "key": "slash"}]
         s["battle"]["phase"] = "PLAYER_TURN"
         s.modified = True
     r = client.post("/demo/battle/card/p-kill", follow_redirects=True)

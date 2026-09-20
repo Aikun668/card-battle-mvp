@@ -13,6 +13,11 @@ class BattlePhase(str, Enum):
     DRAW = "DRAW"
 
 
+class Side(str, Enum):
+    PLAYER = "player"
+    ENEMY = "enemy"
+
+
 class AIDifficulty(str, Enum):
     EASY = "easy"
     MEDIUM = "medium"
@@ -52,6 +57,16 @@ class Combatant:
     hp: int
     shield: int = 0
     energy: int = 3
+
+
+@dataclass
+class ParticipantState:
+    hero: HeroDefinition
+    combatant: Combatant
+    hand: list[dict]
+    draw_pile: list[str]
+    discard_pile: list[str]
+    skill_used_this_turn: bool = False
 
 
 @dataclass

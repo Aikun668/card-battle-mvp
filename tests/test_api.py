@@ -12,6 +12,11 @@ def make_client(tmp_path):
     return app.test_client()
 
 
+def side_state(session: dict, side: str) -> dict:
+    """读取 session 里某个参与者的原始分区。"""
+    return session["battle"]["participants"][side]
+
+
 def test_root_is_backend_health_metadata_and_demo_is_explicit(tmp_path):
     client = make_client(tmp_path)
 
@@ -71,22 +76,22 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     client = make_client(tmp_path)
     client.post("/api/game", json={"hero_key": "warrior"})
     with client.session_transaction() as session:
-        session["battle"]["hand"] = [{"id": "player-slash", "key": "slash"}]
+        side_state(session, "player")["hand"] = [{"id": "player-slash", "key": "slash"}]
         session.modified = True
     state = client.get("/api/game").get_json()["data"]
     card_id = next(card["id"] for card in state["hand"] if card["key"] == "slash")
+    enemy_hp_before = state["enemy"]["hp"]
 
     card_response = client.post("/api/game/actions/card", json={"card_id": card_id})
     assert card_response.status_code == 200
     after_card = card_response.get_json()["data"]
-    assert after_card["enemy"]["hp"] == 22
+    assert after_card["enemy"]["hp"] == enemy_hp_before - 6
     assert after_card["player"]["energy"] == 2
 
     with client.session_transaction() as session:
-        session["battle"]["hand"] = [
-            card for card in session["battle"]["hand"] if card["key"] != "dodge"
-        ]
-        session["battle"]["enemy_hand"] = [{"id": "enemy-shield", "key": "shield"}]
+        player = side_state(session, "player")
+        player["hand"] = [card for card in player["hand"] if card["key"] != "dodge"]
+        side_state(session, "enemy")["hand"] = [{"id": "enemy-shield", "key": "shield"}]
         session.modified = True
 
     end_turn_response = client.post("/api/game/actions/end-turn")
@@ -181,9 +186,12 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
     client = make_client(tmp_path)
     client.post("/api/game", json={"hero_key": "warrior"})
     with client.session_transaction() as session:
-        session["battle"]["player"]["energy"] = 2
-        session["battle"]["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        session["battle"]["enemy_hand"] = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+        player = side_state(session, "player")
+        player["combatant"]["energy"] = 2
+        player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
+        side_state(session, "enemy")["hand"] = [
+            {"id": "enemy-heavy", "key": "heavy_strike"}
+        ]
         session.modified = True
 
     end_turn = client.post("/api/game/actions/end-turn")
@@ -221,10 +229,13 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
     client = make_client(tmp_path)
     client.post("/api/game", json={"hero_key": "warrior"})
     with client.session_transaction() as session:
-        session["battle"]["player"]["energy"] = 1
-        session["battle"]["player"]["shield"] = 4
-        session["battle"]["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        session["battle"]["enemy_hand"] = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+        player = side_state(session, "player")
+        player["combatant"]["energy"] = 1
+        player["combatant"]["shield"] = 4
+        player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
+        side_state(session, "enemy")["hand"] = [
+            {"id": "enemy-heavy", "key": "heavy_strike"}
+        ]
         session.modified = True
 
     client.post("/api/game/actions/end-turn")

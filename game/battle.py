@@ -10,52 +10,93 @@ from game.models import (
     CardDefinition,
     Combatant,
     HeroDefinition,
+    ParticipantState,
+    Side,
 )
 
 HAND_LIMIT = 6
-ENEMY_STARTING_HP = 28
 STARTING_HAND = 5
 ROUND_LIMIT = 10
+ENEMY_NAME = "电脑"
+# 旧 session 缺少电脑英雄信息时使用的默认英雄，见 _migrate_legacy_participants()。
+LEGACY_ENEMY_HERO_KEY = "warrior"
 # 电脑无法主动打出闪避（见 game/ai.py 的 ENEMY_UNUSABLE_EFFECTS），发到它手里只是废牌。
 ENEMY_DECK_KEYS = [key for key in FIXED_DECK_KEYS if key != "dodge"]
 
 
+def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
+    """电脑从不依赖玩家英雄进行反选，只用一个 RNG 从同一英雄池里抽。"""
+    return rng.choice(list(HEROES.values()))
+
+
+def _shuffled_deck(rng: random.Random, keys: list[str]) -> list[str]:
+    deck = list(keys)
+    rng.shuffle(deck)
+    return deck
+
+
+def _zone_alias(side: Side, attribute: str):
+    """过渡期别名：把旧的扁平字段名映射到对应参与者的分区。"""
+
+    def getter(self):
+        return getattr(self.participants[side], attribute)
+
+    def setter(self, value):
+        setattr(self.participants[side], attribute, value)
+
+    return property(getter, setter)
+
+
 class BattleState:
+    hand = _zone_alias(Side.PLAYER, "hand")
+    draw_pile = _zone_alias(Side.PLAYER, "draw_pile")
+    discard_pile = _zone_alias(Side.PLAYER, "discard_pile")
+    enemy_hand = _zone_alias(Side.ENEMY, "hand")
+    enemy_draw_pile = _zone_alias(Side.ENEMY, "draw_pile")
+    enemy_discard_pile = _zone_alias(Side.ENEMY, "discard_pile")
+    skill_used_this_turn = _zone_alias(Side.PLAYER, "skill_used_this_turn")
+
     def __init__(
         self,
-        hero: HeroDefinition,
-        player: Combatant,
-        enemy: Combatant,
-        hand: list[dict],
-        draw_pile: list[str],
-        discard_pile: list[str],
-        enemy_hand: list[dict],
-        enemy_draw_pile: list[str],
-        enemy_discard_pile: list[str],
+        participants: dict[Side, ParticipantState],
         round_number: int,
         phase: BattlePhase,
         log: list[str],
-        skill_used_this_turn: bool = False,
         pending_attack: dict | None = None,
         rng: random.Random | None = None,
         ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
+        starting_side: Side = Side.PLAYER,
     ) -> None:
-        self.hero = hero
-        self.player = player
-        self.enemy = enemy
-        self.hand = hand
-        self.draw_pile = draw_pile
-        self.discard_pile = discard_pile
-        self.enemy_hand = enemy_hand
-        self.enemy_draw_pile = enemy_draw_pile
-        self.enemy_discard_pile = enemy_discard_pile
+        self.participants = participants
         self.round_number = round_number
         self.phase = phase
         self.log = log
-        self.skill_used_this_turn = skill_used_this_turn
         self.pending_attack = pending_attack
         self.rng = rng or random.Random()
         self.ai_difficulty = ai_difficulty
+        self.starting_side = starting_side
+
+    def participant(self, side: Side) -> ParticipantState:
+        return self.participants[side]
+
+    def opponent_of(self, side: Side) -> ParticipantState:
+        return self.participants[Side.ENEMY if side is Side.PLAYER else Side.PLAYER]
+
+    @property
+    def hero(self) -> HeroDefinition:
+        return self.participants[Side.PLAYER].hero
+
+    @property
+    def enemy_hero(self) -> HeroDefinition:
+        return self.participants[Side.ENEMY].hero
+
+    @property
+    def player(self) -> Combatant:
+        return self.participants[Side.PLAYER].combatant
+
+    @property
+    def enemy(self) -> Combatant:
+        return self.participants[Side.ENEMY].combatant
 
     @classmethod
     def create(
@@ -63,31 +104,45 @@ class BattleState:
         hero_key: str,
         rng: random.Random,
         ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
+        starting_side: Side | None = None,
     ) -> "BattleState":
         hero = HEROES[hero_key]
-        player = Combatant(name=hero.name, max_hp=hero.max_hp, hp=hero.max_hp)
-        enemy = Combatant(name="电脑", max_hp=ENEMY_STARTING_HP, hp=ENEMY_STARTING_HP)
-        draw_pile = list(FIXED_DECK_KEYS)
-        rng.shuffle(draw_pile)
-        enemy_draw_pile = list(ENEMY_DECK_KEYS)
-        rng.shuffle(enemy_draw_pile)
+        enemy_hero = choose_enemy_hero(rng)
+        first_side = starting_side or Side.PLAYER
         state = cls(
-            hero=hero,
-            player=player,
-            enemy=enemy,
-            hand=[],
-            draw_pile=draw_pile,
-            discard_pile=[],
-            enemy_hand=[],
-            enemy_draw_pile=enemy_draw_pile,
-            enemy_discard_pile=[],
+            participants={
+                Side.PLAYER: ParticipantState(
+                    hero=hero,
+                    combatant=Combatant(
+                        name=hero.name, max_hp=hero.max_hp, hp=hero.max_hp
+                    ),
+                    hand=[],
+                    draw_pile=_shuffled_deck(rng, FIXED_DECK_KEYS),
+                    discard_pile=[],
+                ),
+                Side.ENEMY: ParticipantState(
+                    hero=enemy_hero,
+                    combatant=Combatant(
+                        name=ENEMY_NAME,
+                        max_hp=enemy_hero.max_hp,
+                        hp=enemy_hero.max_hp,
+                    ),
+                    hand=[],
+                    draw_pile=_shuffled_deck(rng, ENEMY_DECK_KEYS),
+                    discard_pile=[],
+                ),
+            },
             round_number=1,
-            phase=BattlePhase.PLAYER_TURN,
+            phase=BattlePhase.PLAYER_TURN
+            if first_side is Side.PLAYER
+            else BattlePhase.ENEMY_TURN,
             log=[],
             rng=rng,
             ai_difficulty=ai_difficulty,
+            starting_side=first_side,
         )
         state.log.append(f"战斗开始，玩家选择角色：{hero.name}")
+        state.log.append(f"电脑选择角色：{enemy_hero.name}")
         state.draw_cards(STARTING_HAND)
         state._draw_enemy_cards(STARTING_HAND)
         return state
@@ -373,38 +428,14 @@ class BattleState:
 
     def to_dict(self) -> dict:
         return {
-            "hero": {
-                "key": self.hero.key,
-                "name": self.hero.name,
-                "max_hp": self.hero.max_hp,
-                "skill_name": self.hero.skill_name,
-                "skill_type": self.hero.skill_type,
-                "skill_value": self.hero.skill_value,
+            "participants": {
+                side.value: _participant_to_payload(participant)
+                for side, participant in self.participants.items()
             },
-            "player": {
-                "name": self.player.name,
-                "max_hp": self.player.max_hp,
-                "hp": self.player.hp,
-                "shield": self.player.shield,
-                "energy": self.player.energy,
-            },
-            "enemy": {
-                "name": self.enemy.name,
-                "max_hp": self.enemy.max_hp,
-                "hp": self.enemy.hp,
-                "shield": self.enemy.shield,
-                "energy": self.enemy.energy,
-            },
-            "hand": [{"id": c["id"], "key": c["key"]} for c in self.hand],
-            "draw_pile": list(self.draw_pile),
-            "discard_pile": list(self.discard_pile),
-            "enemy_hand": [{"id": c["id"], "key": c["key"]} for c in self.enemy_hand],
-            "enemy_draw_pile": list(self.enemy_draw_pile),
-            "enemy_discard_pile": list(self.enemy_discard_pile),
+            "starting_side": self.starting_side.value,
             "round_number": self.round_number,
             "phase": self.phase.value,
             "log": list(self.log),
-            "skill_used_this_turn": self.skill_used_this_turn,
             "pending_attack": dict(self.pending_attack)
             if self.pending_attack
             else None,
@@ -413,37 +444,83 @@ class BattleState:
 
     @classmethod
     def from_dict(cls, payload: dict) -> "BattleState":
-        hero_def = HEROES[payload["hero"]["key"]]
-        player = Combatant(
-            name=payload["player"]["name"],
-            max_hp=payload["player"]["max_hp"],
-            hp=payload["player"]["hp"],
-            shield=payload["player"]["shield"],
-            energy=payload["player"]["energy"],
-        )
-        enemy = Combatant(
-            name=payload["enemy"]["name"],
-            max_hp=payload["enemy"]["max_hp"],
-            hp=payload["enemy"]["hp"],
-            shield=payload["enemy"]["shield"],
-            energy=payload["enemy"]["energy"],
-        )
+        participants_payload = payload.get("participants")
+        if participants_payload is None:
+            participants = _migrate_legacy_participants(payload)
+        else:
+            participants = {
+                side: _participant_from_payload(participants_payload[side.value])
+                for side in (Side.PLAYER, Side.ENEMY)
+            }
         return cls(
-            hero=hero_def,
-            player=player,
-            enemy=enemy,
-            hand=list(payload["hand"]),
-            draw_pile=list(payload["draw_pile"]),
-            discard_pile=list(payload["discard_pile"]),
-            enemy_hand=list(payload["enemy_hand"]),
-            enemy_draw_pile=list(payload["enemy_draw_pile"]),
-            enemy_discard_pile=list(payload["enemy_discard_pile"]),
+            participants=participants,
             round_number=payload["round_number"],
             phase=BattlePhase(payload["phase"]),
             log=list(payload["log"]),
-            skill_used_this_turn=payload["skill_used_this_turn"],
             pending_attack=payload.get("pending_attack"),
             ai_difficulty=AIDifficulty(
                 payload.get("ai_difficulty", AIDifficulty.MEDIUM.value)
             ),
+            starting_side=Side(payload.get("starting_side", Side.PLAYER.value)),
         )
+
+
+def _combatant_to_payload(combatant: Combatant) -> dict:
+    return {
+        "name": combatant.name,
+        "max_hp": combatant.max_hp,
+        "hp": combatant.hp,
+        "shield": combatant.shield,
+        "energy": combatant.energy,
+    }
+
+
+def _participant_to_payload(participant: ParticipantState) -> dict:
+    return {
+        "hero_key": participant.hero.key,
+        "combatant": _combatant_to_payload(participant.combatant),
+        "hand": [{"id": c["id"], "key": c["key"]} for c in participant.hand],
+        "draw_pile": list(participant.draw_pile),
+        "discard_pile": list(participant.discard_pile),
+        "skill_used_this_turn": participant.skill_used_this_turn,
+    }
+
+
+def _participant_from_payload(payload: dict) -> ParticipantState:
+    return ParticipantState(
+        hero=HEROES[payload["hero_key"]],
+        combatant=Combatant(**payload["combatant"]),
+        hand=[dict(card) for card in payload["hand"]],
+        draw_pile=list(payload["draw_pile"]),
+        discard_pile=list(payload["discard_pile"]),
+        skill_used_this_turn=payload["skill_used_this_turn"],
+    )
+
+
+def _migrate_legacy_participants(payload: dict) -> dict[Side, ParticipantState]:
+    """把"玩家字段 + 电脑特例字段"的旧存档升级成两个对等参与者。"""
+    enemy_hero = HEROES[LEGACY_ENEMY_HERO_KEY]
+    legacy_enemy = payload["enemy"]
+    return {
+        Side.PLAYER: ParticipantState(
+            hero=HEROES[payload["hero"]["key"]],
+            combatant=Combatant(**payload["player"]),
+            hand=[dict(card) for card in payload["hand"]],
+            draw_pile=list(payload["draw_pile"]),
+            discard_pile=list(payload["discard_pile"]),
+            skill_used_this_turn=payload["skill_used_this_turn"],
+        ),
+        Side.ENEMY: ParticipantState(
+            hero=enemy_hero,
+            combatant=Combatant(
+                name=legacy_enemy["name"],
+                max_hp=enemy_hero.max_hp,
+                hp=max(0, min(legacy_enemy["hp"], enemy_hero.max_hp)),
+                shield=legacy_enemy["shield"],
+                energy=legacy_enemy["energy"],
+            ),
+            hand=[dict(card) for card in payload["enemy_hand"]],
+            draw_pile=list(payload["enemy_draw_pile"]),
+            discard_pile=list(payload["enemy_discard_pile"]),
+        ),
+    }

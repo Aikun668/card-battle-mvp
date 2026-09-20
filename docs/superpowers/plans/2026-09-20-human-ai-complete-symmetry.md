@@ -59,7 +59,7 @@
 - Consumes: `HEROES`、`Combatant`、现有 session `battle` payload。
 - Produces: `Side` 枚举、`ParticipantState`、`BattleState.participant(side)`、`BattleState.enemy_hero` 与可向后兼容的 `to_dict()` / `from_dict()`。
 
-- [ ] **Step 1: 写双方英雄与旧 session 迁移失败测试**
+- [x] **Step 1: 写双方英雄与旧 session 迁移失败测试**
 
 ```python
 def test_new_battle_assigns_two_heroes_from_the_same_roster():
@@ -79,13 +79,13 @@ def test_old_session_payload_migrates_with_a_valid_enemy_hero():
     assert restored.enemy_hero.key in HEROES
 ```
 
-- [ ] **Step 2: 运行测试，确认当前状态只有玩家英雄和固定 28 生命电脑**
+- [x] **Step 2: 运行测试，确认当前状态只有玩家英雄和固定 28 生命电脑**
 
 Run: `pytest tests/test_battle.py tests/test_session_state.py -q`
 
 Expected: 新增测试因 `Side`、`ParticipantState` 或 `enemy_hero` 不存在而失败。
 
-- [ ] **Step 3: 在模型中定义双方参与者**
+- [x] **Step 3: 在模型中定义双方参与者**
 
 ```python
 class Side(str, Enum):
@@ -105,7 +105,7 @@ class ParticipantState:
 
 `BattleState` 持有两个 `ParticipantState`，并提供 `participant(side)` 和 `opponent_of(side)`。在过渡期保留只读 `player`、`enemy`、`hero` 属性，映射到对应参与者，避免一次性破坏路由和旧测试。
 
-- [ ] **Step 4: 独立随机电脑英雄，不做反选**
+- [x] **Step 4: 独立随机电脑英雄，不做反选**
 
 `create()` 使用同一个会话 RNG 从 `HEROES` 中选择电脑英雄；允许与玩家同英雄。选择函数只接收 RNG 和英雄目录，不接收玩家英雄 key，确保电脑不会根据玩家选择进行隐藏克制。
 
@@ -114,22 +114,30 @@ def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
     return rng.choice(list(HEROES.values()))
 ```
 
-- [ ] **Step 5: 为旧 session 提供兼容读取**
+- [x] **Step 5: 为旧 session 提供兼容读取**
 
 旧 payload 缺少 `participants` 时，根据旧的 `hero`、`player`、`enemy`、`hand` 和三套牌区构建双方参与者；敌方英雄使用固定且可复现的默认英雄 `warrior`，并把旧电脑的 `max_hp` 规范为战士的生命上限、把当前生命夹在 `0..32` 范围内。这样旧存档从下一次保存开始就进入新规则，不会留下“战士英雄却只有 28 点最大生命”的半迁移状态。新对局必须使用随机选择，不能沿用该默认值。
 
-- [ ] **Step 6: 运行状态与会话测试**
+- [x] **Step 6: 运行状态与会话测试**
 
 Run: `pytest tests/test_battle.py tests/test_session_state.py -q`
 
 Expected: 新局存在两个英雄；旧 session 可读取；新 payload 往返不丢失双方英雄和技能状态。
 
-- [ ] **Step 7: 提交参与者模型改动**
+- [x] **Step 7: 提交参与者模型改动**
 
 ```bash
 git add game/models.py game/battle.py game/session_state.py tests/test_battle.py tests/test_session_state.py
 git commit -m "refactor: model both combatants as equal participants"
 ```
+
+**验收记录（Task 1）**
+
+- 实际改动文件：`game/models.py`、`game/battle.py`、`tests/test_battle.py`、`tests/test_session_state.py`、`tests/test_ai.py`、`tests/test_api.py`、`tests/test_app.py`、`tests/test_acceptance_scenarios.py`。`game/session_state.py` 无需改动——序列化完全走 `to_dict()` / `from_dict()`，旧键迁就逻辑集中在 `game/battle.py`。
+- 决策 1 的落地方式：`tests/test_acceptance_scenarios.py`、`tests/test_api.py`、`tests/test_app.py` 各加一个 `side_state(session, side)` 辅助函数读 `session["battle"]["participants"][side]`，旧扁平键断言全部迁走；`test_ai.py` 只固定了电脑生命上限，避免随机英雄让"半血恐惧"评分漂移。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **112 passed**。
+- HTTP 流程（真实 `python app.py` + `urllib`，非 test client）：`POST /api/game` 201 且 `phase=PLAYER_TURN`；连续五次创建拿到电脑 `max_hp` 依次为 27/32/32/32/24（战士 32、游侠 27、法师 24），证明随机英雄贯通到接口；`POST /api/game/actions/card` 200 且斩击 24→18、能量 3→2；`POST /api/game/actions/end-turn` 200 且回到 `PLAYER_TURN`、`round_number=2`；`GET /demo/heroes`、`GET /demo/battle` 均 200 且保留"确认角色/生命值/护盾/战斗日志"。
+- 平衡探针（Task 1 基线，120 局/格，困难 AI，`%TEMP%\balance_probe4.py`）：战士贪心 胜 1.7% / 负 0% / 平 98.3%、平均 9.9 回合；法师 胜 90.8% / 负 9.2%；游侠 胜 66.7% / 负 33.3%。电脑英雄抽取 1200 次为 warrior 414 / mage 397 / ranger 389，接近均匀。**结论：随机电脑英雄没有改变"战士拖平"的结论**，护盾问题仍按决策 8 留到 Task 2 复测。
 
 ### Task 2: 统一牌库、先手、回合资源和护盾生命周期
 

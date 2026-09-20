@@ -1,7 +1,8 @@
 import random
 
 from game.battle import BattleState
-from game.models import AIDifficulty, BattlePhase
+from game.catalog import HEROES
+from game.models import AIDifficulty, BattlePhase, Side
 
 
 def make_battle(hero_key="warrior"):
@@ -12,29 +13,84 @@ def test_new_battle_has_five_cards_three_energy_and_player_turn():
     battle = make_battle()
     assert battle.phase is BattlePhase.PLAYER_TURN
     assert battle.player.hp == 32
-    assert battle.enemy.hp == 28
+    assert battle.enemy.hp == battle.enemy_hero.max_hp
     assert battle.player.energy == 3
     assert len(battle.hand) == 5
     assert battle.round_number == 1
 
 
+def test_new_battle_assigns_two_heroes_from_the_same_roster():
+    battle = BattleState.create("mage", random.Random(7), starting_side=Side.PLAYER)
+    player = battle.participant(Side.PLAYER)
+    enemy = battle.participant(Side.ENEMY)
+    assert player.hero.key == "mage"
+    assert enemy.hero.key in HEROES
+    assert enemy.combatant.max_hp == HEROES[enemy.hero.key].max_hp
+    assert battle.enemy_hero is enemy.hero
+    assert battle.hero is player.hero
+
+
+def test_participants_expose_both_sides_private_zones():
+    battle = BattleState.create("ranger", random.Random(3))
+    player = battle.participant(Side.PLAYER)
+    enemy = battle.participant(Side.ENEMY)
+    assert battle.opponent_of(Side.PLAYER) is enemy
+    assert battle.opponent_of(Side.ENEMY) is player
+    assert player.combatant is battle.player
+    assert enemy.combatant is battle.enemy
+    assert len(player.hand) == 5
+    assert len(enemy.hand) == 5
+    assert player.skill_used_this_turn is False
+    assert enemy.skill_used_this_turn is False
+
+
+def test_enemy_hero_does_not_depend_on_the_player_hero():
+    picked = {
+        BattleState.create(hero, random.Random(11)).enemy_hero.key
+        for hero in ("warrior", "mage", "ranger")
+    }
+    assert len(picked) == 1
+
+
+def test_enemy_hero_varies_across_games():
+    picked = {
+        BattleState.create("warrior", random.Random(seed)).enemy_hero.key
+        for seed in range(20)
+    }
+    assert picked == set(HEROES)
+
+
+def test_starting_side_defaults_to_the_player():
+    assert (
+        BattleState.create("warrior", random.Random(7)).phase is BattlePhase.PLAYER_TURN
+    )
+
+
+def test_starting_side_can_hand_the_first_turn_to_the_enemy():
+    battle = BattleState.create("warrior", random.Random(7), starting_side=Side.ENEMY)
+    assert battle.phase is BattlePhase.ENEMY_TURN
+    assert battle.starting_side is Side.ENEMY
+
+
 def test_damage_uses_shield_before_health():
     battle = make_battle()
     battle.enemy.shield = 4
+    hp_before = battle.enemy.hp
     battle.apply_damage(battle.enemy, 6)
     assert battle.enemy.shield == 0
-    assert battle.enemy.hp == 26
+    assert battle.enemy.hp == hp_before - 2
 
 
 def test_playing_a_card_spends_energy_moves_card_and_writes_log():
     battle = make_battle()
     battle.hand = [{"id": "player-slash", "key": "slash"}]
+    hp_before = battle.enemy.hp
     result = battle.play_card("player-slash")
     assert result.ok is True
     assert battle.player.energy == 2
     assert len(battle.hand) == 0
     assert len(battle.discard_pile) == 1
-    assert battle.enemy.hp == 22
+    assert battle.enemy.hp == hp_before - 6
     assert "斩击" in battle.log[-1]
 
 

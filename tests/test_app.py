@@ -12,6 +12,11 @@ def make_client(tmp_path):
     return app.test_client()
 
 
+def side_state(session: dict, side: str) -> dict:
+    """读取 session 里某个参与者的原始分区。"""
+    return session["battle"]["participants"][side]
+
+
 def test_start_page_and_hero_page_render(tmp_path):
     client = make_client(tmp_path)
     assert client.get("/demo").status_code == 200
@@ -34,8 +39,8 @@ def test_card_post_redirects_and_refresh_does_not_repeat_action(tmp_path):
     page = client.get("/demo/battle").get_data(as_text=True)
     assert "手牌" in page
     with client.session_transaction() as session:
-        card_id = session["battle"]["hand"][0]["id"]
-        enemy_hp_before = session["battle"]["enemy"]["hp"]
+        card_id = side_state(session, "player")["hand"][0]["id"]
+        enemy_hp_before = side_state(session, "enemy")["combatant"]["hp"]
     response = client.post(f"/demo/battle/card/{card_id}")
     assert response.status_code == 302
     first_get = client.get("/demo/battle")
@@ -43,7 +48,7 @@ def test_card_post_redirects_and_refresh_does_not_repeat_action(tmp_path):
     assert first_get.status_code == 200
     assert second_get.status_code == 200
     with client.session_transaction() as session:
-        assert session["battle"]["enemy"]["hp"] <= enemy_hp_before
+        assert side_state(session, "enemy")["combatant"]["hp"] <= enemy_hp_before
 
 
 def test_hero_page_has_a_disabled_confirm_button_before_selection(tmp_path):
@@ -87,8 +92,8 @@ def test_match_result_written_to_sqlite_exactly_once(tmp_path):
     client = make_client(tmp_path)
     client.post("/demo/heroes", data={"hero_key": "warrior"})
     with client.session_transaction() as s:
-        s["battle"]["enemy"]["hp"] = 1
-        s["battle"]["hand"] = [{"id": "x", "key": "slash"}]
+        side_state(s, "enemy")["combatant"]["hp"] = 1
+        side_state(s, "player")["hand"] = [{"id": "x", "key": "slash"}]
         s.modified = True
     client.post("/demo/battle/card/x")  # kills enemy -> VICTORY -> writes to DB
     client.post("/demo/battle/card/x")  # rejected (not in hand)
