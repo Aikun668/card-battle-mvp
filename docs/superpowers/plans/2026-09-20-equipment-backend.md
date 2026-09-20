@@ -331,7 +331,7 @@ git commit -m "feat: teach the AI to value and use equipment"
 - Consumes: Tasks 1–3 的装备模型、结算与 AI。
 - Produces: 双方对称的装备公开字段；更新后的规则文档与验收清单。
 
-- [ ] **Step 1: 写公开状态装备字段的失败测试**
+- [x] **Step 1: 写公开状态装备字段的失败测试**
 
 ```python
 def test_public_state_shows_both_sides_equipment_symmetrically(client):
@@ -339,11 +339,11 @@ def test_public_state_shows_both_sides_equipment_symmetrically(client):
     # 没有装备时为 None；电脑手牌仍然不出现。
 ```
 
-- [ ] **Step 2: 运行测试，确认公开状态还没有装备字段**
+- [x] **Step 2: 运行测试，确认公开状态还没有装备字段**
 
 Run: `pytest tests/test_api.py -q`
 
-- [ ] **Step 3: 在公开状态里对称输出装备**
+- [x] **Step 3: 在公开状态里对称输出装备**
 
 `_side_to_dict()` 给双方各加一个 `equipment` 字段，形状与 `hero` / `skill` 的嵌套风格一致（决策 10）：
 
@@ -356,21 +356,21 @@ Run: `pytest tests/test_api.py -q`
 
 `weapon` 和 `armor` 两个字段**任何时刻都必须存在**，没装备时为 `null`，不能整个键消失——前端要能无条件读它们。装备是公开信息，两边都能看见对面装了什么，这延续了对等改动里"公开信息对称"的原则。**不新增任何路由**：装备仍然走 `POST /api/game/actions/card`。
 
-- [ ] **Step 4: 更新文档**
+- [x] **Step 4: 更新文档**
 
 `docs/interaction-design.md` 补装备的规则章节（两个槽位、1 费、长剑只加成斩击、铁甲先于护盾减伤、每回合首次、装备跨回合保留、装备牌不进弃牌堆）；`docs/api-contract.md` 补公开状态的 `equipment` 字段和示例；`docs/claude-builder/acceptance.md` 补装备的自动化验收项；`README.md` 把"13 张固定卡组"改成 15 张并写清装备规则。**删掉所有"13 张"的旧描述。**
 
-- [ ] **Step 5: 跑全套门槛**
+- [x] **Step 5: 跑全套门槛**
 
 Run: `python -X utf8 -m compileall app.py api_routes.py demo_routes.py web_support.py game && ruff check . && ruff format --check . && pytest -q`
 
 Expected: 全绿。全量测试连跑多轮（路由测试用非种子 RNG）。
 
-- [ ] **Step 6: 真实 HTTP 冒烟与平衡探针**
+- [x] **Step 6: 真实 HTTP 冒烟与平衡探针**
 
 启动单个本地实例（`use_reloader=False`），用 `urllib` 脚本走 `/api`：验证装备能从接口打出、公开状态的 `equipment` 双方对称、电脑会自己装备、电脑手牌仍然不泄露。然后跑 120 局/格的平衡探针，**重点看铁甲是否让战士的拖平率上升**（决策 8 记录的已知风险），把结果写进验收记录。探针脚本沿用 `%TEMP%\balance_probe7.py` 的玩家策略，保证跨任务可比。
 
-- [ ] **Step 7: 提交公开状态与验收改动**
+- [x] **Step 7: 提交公开状态与验收改动**
 
 ```bash
 git add game/public_state.py tests/test_api.py tests/test_frontend_contract.py README.md docs/interaction-design.md docs/api-contract.md docs/claude-builder/acceptance.md
@@ -379,7 +379,29 @@ git commit -m "feat: publish equipment in the public state and document it"
 
 **验收记录（Task 4）**
 
-（实施后填写）
+- 实际改动文件：`game/public_state.py`、`tests/test_api.py`、`README.md`、`docs/interaction-design.md`、`docs/api-contract.md`、`docs/claude-builder/acceptance.md`，与计划一致；**`tests/test_frontend_contract.py` 未改**，理由见下。
+- 实现要点：
+  - `_side_to_dict()` 新增 `equipment`，槽位值走新的 `_slot_to_dict()`、复用已有的 `_card_to_dict()`；`weapon` / `armor` 两个键任何时刻都在，空槽是 `null`。
+  - 比计划 Step 3 的示例多带一个 `effect_type: "equip"`——直接用 `_card_to_dict()` 的完整结果，不给装备单写一份裁剪逻辑；前端要靠它区分装备牌和普通手牌。
+  - 没有新增任何路由：装备照旧走 `POST /api/game/actions/card`。
+- **偏离：没有动 `tests/test_frontend_contract.py`**（计划把它列进了本任务的测试文件）。那个文件断言的是 `static/game.js` / `game.css` 里的前端契约，而本轮前端明确不改（决策 10）——硬加一条"前端读得到 equipment"的断言，等于把一个没人实现的消费者写进契约。装备的前端契约留到前端那一轮，和读取它的代码一起加。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **207 passed**（Task 3 结束时 205），连跑 4 轮稳定。新增 2 个测试（都在 `tests/test_api.py`）。RED→GREEN：实现前两个都红在 `KeyError: 'equipment'`。
+- **真实 HTTP 冒烟**（单个本地实例 `use_reloader=False`，`urllib` 走 `/api`，不碰 session）：
+  - 双方 `equipment` 形状对称、两个键恒在、槽里是完整的卡牌定义；全程没有 `enemy_hand` / `enemy_draw_pile` / 电脑 `hand` 之类的键；
+  - 第 2 局就抽到长剑：从接口打出后 weapon 槽回显一致、能量 -1、那张牌离开手牌、对面 `equipment` 不受影响；
+  - **长剑加成在真实接口上落地**：装上长剑后打出的斩击让电脑掉 8 点（基础 6 + 武器 2），日志数字与扣血一致，不是只有单元测试说得通；
+  - 40 局完整对局里 **26 局电脑自己装备**（护甲 23、长剑 7），装备确实在它的回合里通过接口出现。
+- **平衡探针（120 局/格，玩家策略沿用 probe7 的贪心策略）——决策 8 记的"铁甲会不会加重拖平"答案是"分边"**：
+  - **电脑穿铁甲不推高平局率**：战士 平 简单 69.2% / 中等 68.3% / 困难 65.8%，对比 Task 3 基线 68.3~70.8%，持平到略降（120 局下二项噪声约 ±4.4 点），平均回合 9.1~9.3 也没动。
+  - **玩家主动穿铁甲才会推高**：同一个战士换成"没伤害牌可打时优先装备"的策略，平局率 65.8% → **80.0%**，负率 33.3% → 19.2%，回合 9.1 → 9.5。
+  - 隔离实验（probe9，战士 vs 困难 AI，120 局/格）把归因钉死：只装长剑（且等伤害打完才装）与不装备**逐位相同**（平 65.8%），只装铁甲一个人就吃满全部效应（平 80.0%），铁甲优先 81.7%、长剑+铁甲 81.7%。所以不是"把能量花在装备上少打了输出"，就是减伤本身。
+  - 绝对量很小：铁甲在玩家侧每局平均触发 2.42~2.75 次、合计 4.8~5.5 点减伤（120 局共 582~660 点），但战士对局本来就死在 9.1/10 回合的刀口上，2 点/回合够改变结局。
+  - 法师、游侠几乎不受影响（法师困难 平 4.2% → 4.2%，游侠 0.8% → 4.2%）：这是**把已有的战士平局锁加深**，不是全局失衡，方向与决策 8 的预测一致。
+  - 龟缩变体（只叠盾+技能）：战士 平 71.7% / 负 28.3%（Task 3 基线 平 65% / 负 35%），+6.7 点在 1.5σ 内，不当作结论。
+  - 电脑穿装备的频率随对局长度变化：同样 120 局，电脑装备局 简单 91.7% / 中等 73.3% / 困难 69.2%，远高于 Task 3 记的 43% / 34% / 26.5%——Task 3 用的是随机玩家，常常 3~4 回合就结束，电脑没机会抽到装备；换成能撑到 9 回合的贪心玩家，它就有时间穿。两个读数的差异来自对局长度，不是 AI 行为变了。
+- **按决策 9，本轮只交数据、不加限制**。要不要调是数值决策，可选方向（均未实施）：铁甲 2 点降到 1 点、把"每回合一次减伤"改成"整局一次"、或给跨回合护盾加上限。
+- 一处刻意不动的历史文档：`docs/mvp.md` §4.2 仍写着"每个角色初始拥有 12 张固定卡牌"（原本就没算闪避，是 MVP 需求快照）。计划 Step 4 没列它，本轮不改；要不要同步是独立的一小步。
+- 结束状态：装备功能的四个任务全部完成，后端机制打通并已通过公开接口暴露；前端展示、装备替换和数值调优留给后续。
 
 ## Completion Criteria
 
