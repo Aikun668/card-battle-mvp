@@ -69,7 +69,7 @@
 - Consumes: 现有的 `CARDS`、`FIXED_DECK_KEYS`、`ParticipantState`、`to_dict()` / `from_dict()`。
 - Produces: `longsword`（长剑）、`iron_armor`（铁甲）两张 `effect_type="equip"` 的卡牌；15 张的 `FIXED_DECK_KEYS`；`ParticipantState.weapon` / `.armor` / `.weapon_used_this_turn` / `.armor_used_this_turn`。
 
-- [ ] **Step 1: 写牌库构成与存档往返的失败测试**
+- [x] **Step 1: 写牌库构成与存档往返的失败测试**
 
 ```python
 def test_fixed_deck_carries_one_weapon_and_one_armor():
@@ -98,31 +98,31 @@ def test_old_payload_without_gear_keys_reads_back_empty():
     assert restored.participant(Side.PLAYER).weapon is None
 ```
 
-- [ ] **Step 2: 运行测试，确认牌库仍是 13 张且没有装备字段**
+- [x] **Step 2: 运行测试，确认牌库仍是 13 张且没有装备字段**
 
 Run: `pytest tests/test_catalog.py tests/test_session_state.py -q`
 
 Expected: 新增断言因牌库只有 13 张、`ParticipantState` 没有 `weapon` 而失败。
 
-- [ ] **Step 3: 在目录里加入两张装备牌**
+- [x] **Step 3: 在目录里加入两张装备牌**
 
 `CARDS` 新增两条：`longsword`（长剑，`cost=1`、`effect_type="equip"`、`value=2`）和 `iron_armor`（铁甲，同样 1 费、`value=2`）。`FIXED_DECK_KEYS` 各追加 1 张，总数变 15。`CATALOG_KEYS` 是 `tuple(CARDS)`，自动跟随。
 
-- [ ] **Step 4: 给参与者加上装备槽**
+- [x] **Step 4: 给参与者加上装备槽**
 
 `ParticipantState` 新增四个字段：`weapon`、`armor`（都是 `CardDefinition | None`，默认 `None`）和两个本回合标记（`bool`，默认 `False`）。放在 `ParticipantState` 而不是 `Combatant`，因为 `Combatant` 只管血量、护盾和能量，装备是牌的去处，和手牌、抽牌堆、弃牌堆同类。
 
-- [ ] **Step 5: 存档读写装备**
+- [x] **Step 5: 存档读写装备**
 
 `_participant_to_payload()` 写出 `weapon` / `armor` 的 key（没有就写 `None`）和两个标记；`_participant_from_payload()` 用 `payload.get("weapon")` 之类容缺，读到的 key 经 `CARDS` 还原成对象，未知 key 一律当 `None`（不能让一个坏存档炸掉整局）。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `pytest tests/test_catalog.py tests/test_session_state.py tests/test_battle.py -q`
 
 Expected: 牌库 15 张、存档往返保留装备、旧 payload 读出空装备。
 
-- [ ] **Step 7: 提交装备数据模型**
+- [x] **Step 7: 提交装备数据模型**
 
 ```bash
 git add game/catalog.py game/models.py game/battle.py tests/test_catalog.py tests/test_session_state.py
