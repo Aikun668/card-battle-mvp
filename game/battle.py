@@ -1,9 +1,10 @@
 import random
 import uuid
 
-from game.ai import choose_enemy_card
+from game.ai import select_enemy_action
 from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES, STARTING_ENERGY
 from game.models import (
+    AIDifficulty,
     ActionResult,
     BattlePhase,
     CardDefinition,
@@ -15,6 +16,8 @@ HAND_LIMIT = 6
 ENEMY_STARTING_HP = 28
 STARTING_HAND = 5
 ROUND_LIMIT = 10
+# 电脑无法主动打出闪避（见 game/ai.py 的 ENEMY_UNUSABLE_EFFECTS），发到它手里只是废牌。
+ENEMY_DECK_KEYS = [key for key in FIXED_DECK_KEYS if key != "dodge"]
 
 
 class BattleState:
@@ -35,6 +38,7 @@ class BattleState:
         skill_used_this_turn: bool = False,
         pending_attack: dict | None = None,
         rng: random.Random | None = None,
+        ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
     ) -> None:
         self.hero = hero
         self.player = player
@@ -51,15 +55,21 @@ class BattleState:
         self.skill_used_this_turn = skill_used_this_turn
         self.pending_attack = pending_attack
         self.rng = rng or random.Random()
+        self.ai_difficulty = ai_difficulty
 
     @classmethod
-    def create(cls, hero_key: str, rng: random.Random) -> "BattleState":
+    def create(
+        cls,
+        hero_key: str,
+        rng: random.Random,
+        ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
+    ) -> "BattleState":
         hero = HEROES[hero_key]
         player = Combatant(name=hero.name, max_hp=hero.max_hp, hp=hero.max_hp)
         enemy = Combatant(name="电脑", max_hp=ENEMY_STARTING_HP, hp=ENEMY_STARTING_HP)
         draw_pile = list(FIXED_DECK_KEYS)
         rng.shuffle(draw_pile)
-        enemy_draw_pile = list(FIXED_DECK_KEYS)
+        enemy_draw_pile = list(ENEMY_DECK_KEYS)
         rng.shuffle(enemy_draw_pile)
         state = cls(
             hero=hero,
@@ -75,6 +85,7 @@ class BattleState:
             phase=BattlePhase.PLAYER_TURN,
             log=[],
             rng=rng,
+            ai_difficulty=ai_difficulty,
         )
         state.log.append(f"战斗开始，玩家选择角色：{hero.name}")
         state.draw_cards(STARTING_HAND)
@@ -241,13 +252,25 @@ class BattleState:
             return ActionResult(False, "还没有进入电脑回合")
         self.enemy.energy = STARTING_ENERGY
         self.enemy.shield = 0
-        card_id = choose_enemy_card(self)
-        if card_id is not None:
-            self._play_enemy_card(card_id)
-            if self.phase is BattlePhase.RESPONSE:
+        return self._run_enemy_actions()
+
+    def _run_enemy_actions(self) -> ActionResult:
+        # 上限只是防止意外死循环，不是游戏规则：正常情况因无牌可打而结束回合。
+        for _ in range(HAND_LIMIT + 1):
+            if self.is_finished() or self.phase is BattlePhase.RESPONSE:
                 return ActionResult(True, "")
-            self._check_terminal()
+            action = select_enemy_action(self, self.ai_difficulty, self.rng)
+            if action.kind == "pass":
+                break
+            self._play_enemy_card(action.card_id)
         return self._complete_enemy_turn()
+
+    def _resume_enemy_turn(self) -> ActionResult:
+        # 响应结算完可能已经被 _check_terminal() 判定终局，此时不能再推进回合。
+        if self.is_finished():
+            return ActionResult(True, "")
+        self.phase = BattlePhase.ENEMY_TURN
+        return self._run_enemy_actions()
 
     def _complete_enemy_turn(self) -> ActionResult:
         if self.is_finished():
@@ -299,7 +322,7 @@ class BattleState:
             self.log.append(f"电脑使用【{pending_attack['card_name']}】")
             self.log.append("玩家使用【闪避】，抵消了本次伤害")
             self.pending_attack = None
-            return self._complete_enemy_turn()
+            return self._resume_enemy_turn()
 
         if action == "pass":
             self.apply_damage(self.player, pending_attack["damage"])
@@ -308,7 +331,7 @@ class BattleState:
             )
             self.pending_attack = None
             self._check_terminal()
-            return self._complete_enemy_turn()
+            return self._resume_enemy_turn()
 
         return ActionResult(False, "无效的响应操作")
 
@@ -316,6 +339,7 @@ class BattleState:
         for i, card in enumerate(self.enemy_hand):
             if card["id"] == card_instance_id:
                 definition = CARDS[card["key"]]
+                self.enemy.energy -= definition.cost
                 self.enemy_discard_pile.append(definition.key)
                 self.enemy_hand.pop(i)
                 if definition.effect_type == "damage":
@@ -383,6 +407,7 @@ class BattleState:
             "pending_attack": dict(self.pending_attack)
             if self.pending_attack
             else None,
+            "ai_difficulty": self.ai_difficulty.value,
         }
 
     @classmethod
@@ -417,4 +442,7 @@ class BattleState:
             log=list(payload["log"]),
             skill_used_this_turn=payload["skill_used_this_turn"],
             pending_attack=payload.get("pending_attack"),
+            ai_difficulty=AIDifficulty(
+                payload.get("ai_difficulty", AIDifficulty.MEDIUM.value)
+            ),
         )

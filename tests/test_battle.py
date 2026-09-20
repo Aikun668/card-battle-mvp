@@ -1,7 +1,7 @@
 import random
 
 from game.battle import BattleState
-from game.models import BattlePhase
+from game.models import AIDifficulty, BattlePhase
 
 
 def make_battle(hero_key="warrior"):
@@ -218,6 +218,19 @@ def test_passing_response_resolves_damage_with_shield_first():
     assert battle.player.hp == 26
     assert battle.player.energy == 3
     assert "电脑使用【重击】，对你造成 10 点伤害" in battle.log
+
+
+def test_ai_difficulty_defaults_to_medium_and_survives_serialization():
+    battle = make_battle()
+    assert battle.ai_difficulty is AIDifficulty.MEDIUM
+    battle.ai_difficulty = AIDifficulty.HARD
+    restored = BattleState.from_dict(battle.to_dict())
+    assert restored.ai_difficulty is AIDifficulty.HARD
+
+
+def test_create_accepts_an_explicit_difficulty():
+    battle = BattleState.create("mage", random.Random(7), AIDifficulty.EASY)
+    assert battle.ai_difficulty is AIDifficulty.EASY
 
 
 def test_enemy_attack_resolves_immediately_without_available_dodge():

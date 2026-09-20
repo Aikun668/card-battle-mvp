@@ -1,13 +1,13 @@
 import random
 
 from game.ai import (
-    choose_enemy_card,
     get_available_enemy_actions,
     rank_enemy_actions,
     select_enemy_action,
 )
 from game.battle import BattleState
-from game.models import AIDifficulty
+from game.catalog import FIXED_DECK_KEYS
+from game.models import AIDifficulty, BattlePhase
 
 
 def make_battle():
@@ -25,6 +25,10 @@ def battle_with_three_ranked_choices():
         {"id": "third", "key": "slash"},
     ]
     return battle
+
+
+def log_index(battle, text):
+    return next(i for i, entry in enumerate(battle.log) if text in entry)
 
 
 # --- Task 3: difficulty selection ---
@@ -166,7 +170,7 @@ def test_actual_healing_outranks_plain_attack_when_hurt_and_no_kill_exists():
     assert ranked[0].card_id == "heal"
 
 
-def test_attack_through_shield_only_scores_the_damage_that_lands():
+def test_attack_that_punches_through_shield_beats_a_fully_absorbed_one():
     battle = make_battle()
     battle.enemy.hp = battle.enemy.max_hp
     battle.player.hp = battle.player.max_hp
@@ -178,6 +182,20 @@ def test_attack_through_shield_only_scores_the_damage_that_lands():
     ]
     ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "heavy"
+
+
+def test_enemy_keeps_attacking_a_heavily_shielded_player_instead_of_stalling():
+    battle = make_battle()
+    battle.enemy.hp = battle.enemy.max_hp
+    battle.player.hp = battle.player.max_hp
+    battle.player.shield = 12
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-fireball", "key": "fireball"},
+        {"id": "enemy-shield", "key": "shield"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].card_id == "enemy-fireball"
 
 
 def test_a_dying_enemy_defends_instead_of_trading_damage():
@@ -205,6 +223,13 @@ def test_pass_outranks_a_heal_that_would_restore_nothing():
     battle.enemy_hand = [{"id": "heal", "key": "heal"}]
     ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
     assert ranked[0].kind == "pass"
+
+
+def test_selection_does_not_mutate_the_battle():
+    battle = battle_with_three_ranked_choices()
+    before = battle.to_dict()
+    select_enemy_action(battle, AIDifficulty.EASY, random.Random(1))
+    assert battle.to_dict() == before
 
 
 def test_ranking_does_not_mutate_the_battle():
@@ -253,27 +278,29 @@ def test_candidate_generation_does_not_mutate_the_battle():
     assert battle.to_dict() == before
 
 
-def test_ai_heals_when_its_health_is_at_or_below_eight():
+def test_enemy_heals_when_badly_hurt():
     battle = make_battle()
     battle.enemy.hp = 8
     battle.enemy_hand = [
         {"id": "enemy-heal", "key": "heal"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    assert choose_enemy_card(battle) == "enemy-heal"
+    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    assert ranked[0].card_id == "enemy-heal"
 
 
-def test_ai_uses_highest_damage_when_player_is_low():
+def test_enemy_goes_for_lethal_damage_when_the_player_is_low():
     battle = make_battle()
     battle.player.hp = 10
     battle.enemy_hand = [
         {"id": "enemy-slash", "key": "slash"},
         {"id": "enemy-fireball", "key": "fireball"},
     ]
-    assert choose_enemy_card(battle) == "enemy-fireball"
+    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    assert ranked[0].card_id == "enemy-fireball"
 
 
-def test_ai_uses_shield_when_low_health_and_no_heal_available():
+def test_enemy_shields_when_hurt_and_no_heal_is_available():
     battle = make_battle()
     battle.enemy.hp = 14
     battle.player.hp = 24
@@ -281,33 +308,120 @@ def test_ai_uses_shield_when_low_health_and_no_heal_available():
         {"id": "enemy-shield", "key": "shield"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    assert choose_enemy_card(battle) == "enemy-shield"
+    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    assert ranked[0].card_id == "enemy-shield"
 
 
-def test_ai_uses_highest_damage_by_default():
-    battle = make_battle()
-    battle.enemy.hp = 24
-    battle.player.hp = 24
-    battle.enemy_hand = [
-        {"id": "enemy-slash", "key": "slash"},
-        {"id": "enemy-fireball", "key": "fireball"},
-        {"id": "enemy-heavy", "key": "heavy_strike"},
-    ]
-    assert choose_enemy_card(battle) == "enemy-fireball"
-
-
-def test_ai_returns_none_when_no_affordable_card():
+def test_enemy_passes_when_it_cannot_afford_any_card():
     battle = make_battle()
     battle.enemy.energy = 0
     battle.enemy_hand = [
         {"id": "enemy-slash", "key": "slash"},
         {"id": "enemy-fireball", "key": "fireball"},
     ]
-    assert choose_enemy_card(battle) is None
+    for difficulty in AIDifficulty:
+        assert select_enemy_action(battle, difficulty, random.Random(5)).kind == "pass"
 
 
-def test_end_turn_runs_one_enemy_action_then_returns_to_player():
+# --- Task 4: enemy turn loop ---
+
+
+def test_enemy_re_ranks_actions_after_each_play():
     battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-heavy", "key": "heavy_strike"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    # 重击花掉 2 点能量，剩余 1 点只够斩击：第二次选择必须重新读取扣费后的状态。
+    assert log_index(battle, "电脑使用【重击】") < log_index(battle, "电脑使用【斩击】")
+    assert battle.enemy.energy == 0
+    assert battle.player.hp == 32 - 10 - 6
+
+
+def test_enemy_stops_playing_once_energy_runs_out():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-fireball", "key": "fireball"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    assert battle.player.hp == 32 - 14
+    assert all("斩击" not in entry for entry in battle.log)
+
+
+def test_enemy_energy_starts_fresh_every_enemy_turn():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 0
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    assert battle.player.hp == 32 - 6
+
+
+def test_enemy_deck_never_contains_dodge():
+    battle = make_battle()
+    enemy_keys = (
+        [card["key"] for card in battle.enemy_hand]
+        + list(battle.enemy_draw_pile)
+        + list(battle.enemy_discard_pile)
+    )
+    assert "dodge" not in enemy_keys
+    assert len(enemy_keys) == len(FIXED_DECK_KEYS) - 1
+
+
+def test_passing_a_response_resumes_the_remaining_enemy_actions():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.player.energy = 3
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-heavy", "key": "heavy_strike"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    assert battle.phase is BattlePhase.RESPONSE
+    battle.respond("pass")
+    assert battle.player.hp == 32 - 10
+    assert battle.phase is BattlePhase.RESPONSE
+    assert battle.pending_attack["card_name"] == "斩击"
+    battle.respond("pass")
+    assert battle.player.hp == 32 - 16
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.round_number == 2
+
+
+def test_dodging_one_attack_lets_the_next_one_land():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.player.energy = 3
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-heavy", "key": "heavy_strike"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    battle.respond("dodge")
+    # 闪避用掉后手里没有第二张闪避，剩下的斩击直接结算。
+    assert battle.player.hp == 32 - 6
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.round_number == 2
+
+
+def test_end_turn_runs_enemy_actions_until_pass():
+    battle = make_battle()
+    battle.enemy.energy = 3
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     initial_hp = battle.player.hp
     assert battle.end_player_turn().ok is True

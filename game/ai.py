@@ -5,17 +5,15 @@ from typing import Literal
 from game.catalog import CARDS, STARTING_ENERGY
 from game.models import AIDifficulty, CardDefinition
 
-DAMAGE_KEYS = {"slash", "heavy_strike", "fireball"}
-LOW_PLAYER_HP = 10
-LOW_ENEMY_HP = 8
-MID_ENEMY_HP = 16
-
 # 电脑没有英雄技能，也无法主动打出只能在响应时机使用的牌。
 ENEMY_UNUSABLE_EFFECTS = frozenset({"dodge"})
 
 LETHAL_BONUS = 1000.0
 EFFICIENCY_WEIGHT = 0.5
 PASS_SCORE = 0.5
+# 削掉护盾是通往击杀的进度，但本身不扣血，所以单价明显低于真实伤害；
+# 若记 0 分，电脑面对高护盾玩家会永远选择空过，直接放弃获胜。
+SHIELD_BREAK_WEIGHT = 0.4
 SHIELD_SCALE = 12.0
 # 平方增长：失血越多，治疗与护盾的边际价值上升越快，濒死时自然转向自保。
 RISK_WEIGHT = 6.0
@@ -55,10 +53,12 @@ def _risk_multiplier(combatant) -> float:
 
 
 def score_damage(state, definition: CardDefinition) -> float:
-    # 被护盾挡下的部分和超出剩余生命的部分都不产生价值。
-    effective = max(0, definition.value - state.player.shield)
+    # 超出剩余生命的部分完全浪费；打在护盾上的部分只算削盾价值，不算生命威胁。
+    absorbed = min(definition.value, state.player.shield)
+    effective = definition.value - absorbed
     useful = min(effective, state.player.hp)
     score = useful + useful / definition.cost * EFFICIENCY_WEIGHT
+    score += absorbed * SHIELD_BREAK_WEIGHT
     if effective >= state.player.hp:
         score += LETHAL_BONUS
     return score
@@ -155,66 +155,9 @@ def select_enemy_action(
     weights = DIFFICULTY_SELECTION.get(difficulty)
     if weights is None:
         return ranked[0]
-    # 零收益动作不参与抽取：简单难度可以选得差，但不该白白浪费手牌。
-    candidates = [candidate for candidate in ranked if candidate.score > 0][
-        : len(weights)
-    ]
-    return rng.choices(candidates, weights=weights[: len(candidates)], k=1)[0]
-
-
-def _card_for_key(card_instance: dict) -> CardDefinition:
-    return CARDS[card_instance["key"]]
-
-
-def _affordable(hand: list[dict], energy: int) -> list[tuple[dict, CardDefinition]]:
-    return [(c, _card_for_key(c)) for c in hand if _card_for_key(c).cost <= energy]
-
-
-def _pick_heal(hand: list[dict], energy: int) -> dict | None:
-    for card, definition in _affordable(hand, energy):
-        if definition.effect_type == "heal":
-            return card
-    return None
-
-
-def _pick_shield(hand: list[dict], energy: int) -> dict | None:
-    for card, definition in _affordable(hand, energy):
-        if definition.effect_type == "shield":
-            return card
-    return None
-
-
-def _pick_highest_damage(hand: list[dict], energy: int) -> dict | None:
-    candidates = [
-        (c, d) for c, d in _affordable(hand, energy) if d.effect_type == "damage"
-    ]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda pair: pair[1].value, reverse=True)
-    return candidates[0][0]
-
-
-def choose_enemy_card(state) -> str | None:
-    enemy = state.enemy
-    hand = state.enemy_hand
-
-    if enemy.hp <= LOW_ENEMY_HP:
-        heal = _pick_heal(hand, enemy.energy)
-        if heal is not None:
-            return heal["id"]
-
-    if state.player.hp <= LOW_PLAYER_HP:
-        dmg = _pick_highest_damage(hand, enemy.energy)
-        if dmg is not None:
-            return dmg["id"]
-
-    if enemy.hp <= MID_ENEMY_HP:
-        shield = _pick_shield(hand, enemy.energy)
-        if shield is not None:
-            return shield["id"]
-
-    dmg = _pick_highest_damage(hand, enemy.energy)
-    if dmg is not None:
-        return dmg["id"]
-
-    return None
+    # 比空过更强的动作才参与抽取：简单难度可以选得差，但不该浪费整回合不做任何事。
+    usable = [candidate for candidate in ranked if candidate.score > PASS_SCORE]
+    if not usable:
+        return ranked[0]
+    pool = usable[: len(weights)]
+    return rng.choices(pool, weights=weights[: len(pool)], k=1)[0]
