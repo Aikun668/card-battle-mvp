@@ -35,7 +35,7 @@ DIFFICULTY_SELECTION: dict[AIDifficulty, tuple[float, ...]] = {
 
 @dataclass(frozen=True)
 class ActionCandidate:
-    kind: Literal["card", "skill", "pass"]
+    kind: Literal["card", "skill", "dodge", "pass"]
     card_id: str | None = None
     card_key: str | None = None
     score: float = 0.0
@@ -178,6 +178,25 @@ def score_enemy_action(
     return score
 
 
+def score_dodge(state) -> float:
+    """电脑闪避这次攻击值多少分：救下护盾吸收之后真会掉的生命。"""
+    pending = state.pending_attack
+    absorbed = min(state.enemy.shield, pending.damage)
+    saved = min(pending.damage - absorbed, state.enemy.hp)
+    if saved <= 0:
+        return 0.0
+    return saved * _risk_multiplier(state.enemy)
+
+
+def rank_enemy_responses(state, difficulty: AIDifficulty) -> list[ActionCandidate]:
+    """响应窗口里电脑只有两个合法动作；分数与出牌共用同一套评分口径。"""
+    candidates = [
+        ActionCandidate(kind="dodge", score=score_dodge(state)),
+        ActionCandidate(kind="pass", score=score_pass(state, difficulty)),
+    ]
+    return sorted(candidates, key=lambda candidate: candidate.score, reverse=True)
+
+
 def rank_enemy_actions(state, difficulty: AIDifficulty) -> list[ActionCandidate]:
     scored = [
         replace(candidate, score=score_enemy_action(state, candidate, difficulty))
@@ -186,17 +205,48 @@ def rank_enemy_actions(state, difficulty: AIDifficulty) -> list[ActionCandidate]
     return sorted(scored, key=lambda candidate: candidate.score, reverse=True)
 
 
-def select_enemy_action(
-    state, difficulty: AIDifficulty, rng: random.Random
+def _weighted_pick(
+    ranked: list[ActionCandidate], difficulty: AIDifficulty, rng
 ) -> ActionCandidate:
-    ranked = rank_enemy_actions(state, difficulty)
     weights = DIFFICULTY_SELECTION.get(difficulty)
     if weights is None:
         return ranked[0]
-    # 比空过更强的动作才参与抽取：简单难度可以选得差，但不该浪费整回合不做任何事。
+    pool = ranked[: len(weights)]
+    return rng.choices(pool, weights=weights[: len(pool)], k=1)[0]
+
+
+def _select(
+    ranked: list[ActionCandidate], difficulty: AIDifficulty, rng
+) -> ActionCandidate:
+    # 比空过更强的动作才参与抽取：简单难度可以选得差，但不该浪费整个回合不做任何事。
     # 战略空过（留能量闪避）分数高于 PASS_SCORE，靠评分自然进池，不是被塞进去的。
     usable = [candidate for candidate in ranked if candidate.score > PASS_SCORE]
     if not usable:
         return ranked[0]
-    pool = usable[: len(weights)]
-    return rng.choices(pool, weights=weights[: len(pool)], k=1)[0]
+    return _weighted_pick(usable, difficulty, rng)
+
+
+def select_enemy_action(
+    state, difficulty: AIDifficulty, rng: random.Random
+) -> ActionCandidate:
+    return _select(rank_enemy_actions(state, difficulty), difficulty, rng)
+
+
+def choose_enemy_response(
+    state, difficulty: AIDifficulty, rng: random.Random
+) -> ActionCandidate:
+    """电脑作为防御方的闪避 / 放弃选择。
+
+    复用出牌的难度配置与评分，但不套用"别浪费整个回合"的过滤：
+    放弃响应只是挨这一下，闪避牌还留在手里，本身就是合法选择。
+    反过来要滤掉零收益的闪避：这一下全被护盾吃掉时闪避救不回任何生命，
+    难度权重不该让它白扔 1 点能量和一张闪避牌——简单难度可以选得差，
+    但不该浪费手里的资源，和出牌侧"不浪费整个回合"是同一个原则。
+    """
+    ranked = rank_enemy_responses(state, difficulty)
+    usable = [
+        candidate
+        for candidate in ranked
+        if candidate.kind == "pass" or candidate.score > 0.0
+    ]
+    return _weighted_pick(usable, difficulty, rng)

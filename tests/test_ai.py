@@ -1,13 +1,16 @@
 import random
 
 from game.ai import (
+    choose_enemy_response,
     get_available_enemy_actions,
     rank_enemy_actions,
+    rank_enemy_responses,
+    score_dodge,
     select_enemy_action,
 )
 from game.battle import BattleState
 from game.catalog import FIXED_DECK_KEYS, HEROES
-from game.models import AIDifficulty, BattlePhase, Side
+from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
 def withhold_enemy_skill(battle):
@@ -431,7 +434,7 @@ def test_passing_a_response_resumes_the_remaining_enemy_actions():
     battle.respond("pass")
     assert battle.player.hp == 32 - 10
     assert battle.phase is BattlePhase.RESPONSE
-    assert battle.pending_attack["card_name"] == "斩击"
+    assert battle.pending_attack.card_name == "斩击"
     battle.respond("pass")
     assert battle.player.hp == 32 - 16
     assert battle.phase is BattlePhase.PLAYER_TURN
@@ -547,3 +550,108 @@ def battle_that_could_waste_its_dodge_energy():
         {"id": "enemy-slash", "key": "slash"},
     ]
     return battle
+
+
+# --- Task 4: 电脑作为防御方的闪避评分 ---
+
+
+def battle_with_a_pending_attack(damage: int):
+    """把电脑摆进响应窗口：玩家打出一张伤害牌，电脑手里有闪避和 1 点能量。"""
+    battle = make_battle()
+    battle.pending_attack = PendingAttack(
+        attacker=Side.PLAYER,
+        defender=Side.ENEMY,
+        card_key="heavy_strike",
+        card_name="重击",
+        damage=damage,
+    )
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    return battle
+
+
+def test_dodge_scores_only_the_damage_that_would_reach_health():
+    battle = battle_with_a_pending_attack(10)
+    battle.enemy.shield = 4
+
+    # 护盾先吸掉 4 点，闪避真正救下的只有 6 点生命。
+    assert score_dodge(battle) == 6.0
+
+
+def test_dodge_scores_nothing_when_the_shield_absorbs_the_whole_hit():
+    battle = battle_with_a_pending_attack(10)
+    battle.enemy.shield = 12
+
+    assert score_dodge(battle) == 0.0
+    assert rank_enemy_responses(battle, AIDifficulty.HARD)[0].kind == "pass"
+
+
+def test_no_difficulty_spends_a_dodge_that_saves_no_health():
+    """零收益的闪避不参与抽取：难度权重可以选得差，但不该白扔一张牌。"""
+    battle = battle_with_a_pending_attack(10)
+    battle.enemy.shield = 12
+
+    for difficulty in AIDifficulty:
+        kinds = {
+            choose_enemy_response(battle, difficulty, random.Random(seed)).kind
+            for seed in range(30)
+        }
+        assert kinds == {"pass"}, difficulty
+
+
+def test_hard_gives_up_a_small_hit_to_keep_its_last_energy_for_a_bigger_one():
+    """只剩 1 点能量时，闪避就等于放弃本回合后面所有闪避机会。"""
+    battle = battle_with_a_pending_attack(2)
+
+    kinds = {
+        choose_enemy_response(battle, AIDifficulty.HARD, random.Random(seed)).kind
+        for seed in range(30)
+    }
+
+    assert kinds == {"pass"}
+
+
+def test_hard_never_declines_a_dodge_that_saves_real_health():
+    battle = battle_with_a_pending_attack(10)
+
+    kinds = {
+        choose_enemy_response(battle, AIDifficulty.HARD, random.Random(seed)).kind
+        for seed in range(20)
+    }
+
+    assert kinds == {"dodge"}
+
+
+def test_easy_occasionally_declines_a_dodge_the_higher_levels_take():
+    battle = battle_with_a_pending_attack(10)
+    rng = random.Random(3)
+
+    easy = [
+        choose_enemy_response(battle, AIDifficulty.EASY, rng).kind for _ in range(200)
+    ]
+    medium = [
+        choose_enemy_response(battle, AIDifficulty.MEDIUM, rng).kind for _ in range(200)
+    ]
+
+    # 简单难度允许看走眼，但不能变成每次都放弃；难度越高越倾向于闪避。
+    assert 0 < easy.count("pass") < 200
+    assert easy.count("dodge") < medium.count("dodge")
+
+
+def test_response_candidates_are_only_dodge_and_pass():
+    battle = battle_with_a_pending_attack(10)
+
+    kinds = [
+        candidate.kind for candidate in rank_enemy_responses(battle, AIDifficulty.EASY)
+    ]
+
+    assert sorted(kinds) == ["dodge", "pass"]
+
+
+def test_responding_does_not_peek_at_or_change_the_enemy_hand():
+    battle = battle_with_a_pending_attack(10)
+    before = battle.to_dict()
+
+    choose_enemy_response(battle, AIDifficulty.HARD, random.Random(0))
+
+    assert battle.to_dict() == before

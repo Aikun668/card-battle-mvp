@@ -69,6 +69,17 @@ class ParticipantState:
     skill_used_this_turn: bool = False
 
 
+@dataclass(frozen=True)
+class PendingAttack:
+    """一次等待响应窗口的伤害攻击；费用与弃牌在挂起前就已经结清。"""
+
+    attacker: Side
+    defender: Side
+    card_key: str
+    card_name: str
+    damage: int
+
+
 @dataclass
 class ActionResult:
     ok: bool

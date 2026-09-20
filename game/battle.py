@@ -1,7 +1,7 @@
 import random
 import uuid
 
-from game.ai import select_enemy_action
+from game.ai import choose_enemy_response, select_enemy_action
 from game.catalog import (
     CARDS,
     FIXED_DECK_KEYS,
@@ -17,6 +17,7 @@ from game.models import (
     Combatant,
     HeroDefinition,
     ParticipantState,
+    PendingAttack,
     Side,
 )
 
@@ -33,7 +34,8 @@ SIDE_PHASE = {phase: side for side, phase in TURN_PHASE.items()}
 # 日志措辞沿用既有文案：玩家出手不写主语，受击写"你"；电脑出手写"电脑"。
 ACTOR_LABEL = {Side.PLAYER: "", Side.ENEMY: "电脑"}
 HIT_LABEL = {Side.PLAYER: "电脑", Side.ENEMY: "你"}
-TURN_LABEL = {Side.PLAYER: "玩家", Side.ENEMY: "电脑"}
+# 回合交接和闪避响应都用完整称呼，玩家一侧也显式写"玩家"。
+SIDE_LABEL = {Side.PLAYER: "玩家", Side.ENEMY: "电脑"}
 
 
 def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
@@ -74,7 +76,7 @@ class BattleState:
         round_number: int,
         phase: BattlePhase,
         log: list[str],
-        pending_attack: dict | None = None,
+        pending_attack: PendingAttack | None = None,
         rng: random.Random | None = None,
         ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
         starting_side: Side = Side.PLAYER,
@@ -234,6 +236,9 @@ class BattleState:
         participant.combatant.energy -= definition.cost
         participant.hand.pop(index)
         participant.discard_pile.append(definition.key)
+        if definition.effect_type == "damage":
+            # 费用与弃牌在挂起前就结清，响应窗口里只决定这次伤害落不落地。
+            return self._open_response(side, definition)
         self._apply_card_effect(
             definition,
             source=participant.combatant,
@@ -355,7 +360,7 @@ class BattleState:
             return ActionResult(False, "本局已经结束，请重新开始")
         if self.current_side() is not side:
             return ActionResult(False, self._wrong_turn_message(side))
-        next_actor = TURN_LABEL[OPPONENT_SIDE[side]]
+        next_actor = SIDE_LABEL[OPPONENT_SIDE[side]]
         self.log.append(f"第 {self.round_number} 回合结束，{next_actor}开始行动")
         return self.advance_turn()
 
@@ -373,23 +378,19 @@ class BattleState:
         # 上限只是防止意外死循环，不是游戏规则：正常情况因无牌可打而结束回合。
         for _ in range(HAND_LIMIT + 1):
             if self.is_finished() or self.phase is BattlePhase.RESPONSE:
+                # 攻击挂起等玩家响应时先收工，剩下的行动由 _finish_response() 续跑。
                 return ActionResult(True, "")
             action = select_enemy_action(self, self.ai_difficulty, self.rng)
             if action.kind == "pass":
                 break
             if action.kind == "skill":
-                self.use_skill_for(Side.ENEMY)
+                result = self.use_skill_for(Side.ENEMY)
             else:
-                self._play_enemy_card(action.card_id)
+                result = self.play_card_for(Side.ENEMY, action.card_id)
+            if not result.ok:
+                break
             self._check_terminal()
         return self._complete_enemy_turn()
-
-    def _resume_enemy_turn(self) -> ActionResult:
-        # 响应结算完可能已经被 _check_terminal() 判定终局，此时不能再推进回合。
-        if self.is_finished():
-            return ActionResult(True, "")
-        self.phase = BattlePhase.ENEMY_TURN
-        return self._run_enemy_actions()
 
     def _complete_enemy_turn(self) -> ActionResult:
         if self.is_finished():
@@ -397,72 +398,108 @@ class BattleState:
         self.log.append(f"第 {self.round_number} 回合结束，玩家开始行动")
         return self.advance_turn()
 
-    def _find_dodge_index(self) -> int:
-        for index, card in enumerate(self.hand):
+    def _find_dodge_index(self, side: Side) -> int:
+        for index, card in enumerate(self.participant(side).hand):
             if card["key"] == "dodge":
                 return index
         return -1
 
-    def _has_available_dodge(self) -> bool:
+    def _has_available_dodge(self, side: Side) -> bool:
+        dodge = CARDS["dodge"]
         return (
-            self._find_dodge_index() != -1 and self.player.energy >= CARDS["dodge"].cost
+            self._find_dodge_index(side) != -1
+            and self.participant(side).combatant.energy >= dodge.cost
         )
 
     def can_dodge(self) -> bool:
-        return self.phase is BattlePhase.RESPONSE and self._has_available_dodge()
+        """页面只问一件事：玩家现在能不能闪避。"""
+        return self.phase is BattlePhase.RESPONSE and self._has_available_dodge(
+            Side.PLAYER
+        )
 
-    def respond(self, action: str) -> ActionResult:
+    def respond_for(self, side: Side, action: str) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
-        if self.phase is not BattlePhase.RESPONSE or self.pending_attack is None:
+        pending = self.pending_attack
+        if self.phase is not BattlePhase.RESPONSE or pending is None:
             return ActionResult(False, "当前没有需要响应的攻击")
-
-        pending_attack = self.pending_attack
+        if pending.defender is not side:
+            return ActionResult(False, "这次攻击不是针对你的")
         if action == "dodge":
-            dodge_index = self._find_dodge_index()
-            dodge = CARDS["dodge"]
-            if dodge_index == -1:
-                return ActionResult(False, "当前没有可用的闪避")
-            if self.player.energy < dodge.cost:
-                return ActionResult(False, "能量不足，还差 1 点")
-            self.player.energy -= dodge.cost
-            self.hand.pop(dodge_index)
-            self.discard_pile.append(dodge.key)
-            self.log.append(f"电脑使用【{pending_attack['card_name']}】")
-            self.log.append("玩家使用【闪避】，抵消了本次伤害")
-            self.pending_attack = None
-            return self._resume_enemy_turn()
-
+            return self._dodge_pending_attack(side)
         if action == "pass":
-            self.apply_damage(self.player, pending_attack["damage"])
-            self.log.append(
-                f"电脑使用【{pending_attack['card_name']}】，对你造成 {pending_attack['damage']} 点伤害"
-            )
-            self.pending_attack = None
-            self._check_terminal()
-            return self._resume_enemy_turn()
-
+            return self._take_pending_attack()
         return ActionResult(False, "无效的响应操作")
 
-    def _play_enemy_card(self, card_instance_id: str) -> None:
-        index = self._find_hand_index(self.enemy_hand, card_instance_id)
+    def respond(self, action: str) -> ActionResult:
+        """玩家对电脑攻击的响应；电脑做防御方时由 AI 在结算里当场决定。"""
+        return self.respond_for(Side.PLAYER, action)
+
+    def _dodge_pending_attack(self, side: Side) -> ActionResult:
+        participant = self.participant(side)
+        dodge = CARDS["dodge"]
+        index = self._find_dodge_index(side)
         if index == -1:
-            return
-        definition = CARDS[self.enemy_hand[index]["key"]]
-        if definition.effect_type == "damage" and self._has_available_dodge():
-            # 电脑造成伤害前要给玩家的闪避留出响应窗口：费用与弃牌先结清，
-            # 伤害挂起等玩家决定响应，结算时才真正生效。
-            self.enemy.energy -= definition.cost
-            self.enemy_hand.pop(index)
-            self.enemy_discard_pile.append(definition.key)
-            self.pending_attack = {
-                "card_key": definition.key,
-                "card_name": definition.name,
-                "damage": definition.value,
-            }
-            self.phase = BattlePhase.RESPONSE
-            return
-        self.play_card_for(Side.ENEMY, card_instance_id)
+            return ActionResult(False, "当前没有可用的闪避")
+        if participant.combatant.energy < dodge.cost:
+            shortage = dodge.cost - participant.combatant.energy
+            return ActionResult(False, f"能量不足，还差 {shortage} 点")
+        participant.combatant.energy -= dodge.cost
+        participant.hand.pop(index)
+        participant.discard_pile.append(dodge.key)
+        self.log.append(
+            f"{ACTOR_LABEL[self.pending_attack.attacker]}使用【{self.pending_attack.card_name}】"
+        )
+        self.log.append(f"{SIDE_LABEL[side]}使用【{dodge.name}】，抵消了本次伤害")
+        return self._finish_response()
+
+    def _open_response(
+        self, attacker: Side, definition: CardDefinition
+    ) -> ActionResult:
+        """伤害牌先挂起：能闪避的一方获得一次响应机会，否则当场按护盾优先结算。"""
+        defender = OPPONENT_SIDE[attacker]
+        if not self._has_available_dodge(defender):
+            self._resolve_damage(attacker, definition)
+            return ActionResult(True, "")
+        self.pending_attack = PendingAttack(
+            attacker=attacker,
+            defender=defender,
+            card_key=definition.key,
+            card_name=definition.name,
+            damage=definition.value,
+        )
+        self.phase = BattlePhase.RESPONSE
+        if defender is Side.ENEMY:
+            # 电脑防御时不阻塞调用方，但阶段先如实置为响应，再当场定夺。
+            self._resolve_enemy_response()
+        return ActionResult(True, "")
+
+    def _resolve_damage(self, attacker: Side, definition: CardDefinition) -> None:
+        self.apply_damage(
+            self.participant(OPPONENT_SIDE[attacker]).combatant, definition.value
+        )
+        self.log.append(self._format_card_log(attacker, definition))
+        self._check_terminal()
+
+    def _take_pending_attack(self) -> ActionResult:
+        pending = self.pending_attack
+        self._resolve_damage(pending.attacker, CARDS[pending.card_key])
+        return self._finish_response()
+
+    def _finish_response(self) -> ActionResult:
+        """响应结算完把回合交还攻击方；攻击方是电脑就接着跑完它剩下的行动。"""
+        attacker = self.pending_attack.attacker
+        self.pending_attack = None
+        if self.is_finished():
+            return ActionResult(True, "")
+        self.phase = TURN_PHASE[attacker]
+        if attacker is Side.ENEMY:
+            return self._run_enemy_actions()
+        return ActionResult(True, "")
+
+    def _resolve_enemy_response(self) -> None:
+        action = choose_enemy_response(self, self.ai_difficulty, self.rng)
+        self.respond_for(Side.ENEMY, action.kind)
 
     def is_finished(self) -> bool:
         return self.phase in (BattlePhase.VICTORY, BattlePhase.DEFEAT, BattlePhase.DRAW)
@@ -477,9 +514,7 @@ class BattleState:
             "round_number": self.round_number,
             "phase": self.phase.value,
             "log": list(self.log),
-            "pending_attack": dict(self.pending_attack)
-            if self.pending_attack
-            else None,
+            "pending_attack": _pending_attack_to_payload(self.pending_attack),
             "ai_difficulty": self.ai_difficulty.value,
         }
 
@@ -498,7 +533,7 @@ class BattleState:
             round_number=payload["round_number"],
             phase=BattlePhase(payload["phase"]),
             log=list(payload["log"]),
-            pending_attack=payload.get("pending_attack"),
+            pending_attack=_pending_attack_from_payload(payload.get("pending_attack")),
             ai_difficulty=AIDifficulty(
                 payload.get("ai_difficulty", AIDifficulty.MEDIUM.value)
             ),
@@ -525,6 +560,31 @@ def _participant_to_payload(participant: ParticipantState) -> dict:
         "discard_pile": list(participant.discard_pile),
         "skill_used_this_turn": participant.skill_used_this_turn,
     }
+
+
+def _pending_attack_to_payload(pending: PendingAttack | None) -> dict | None:
+    if pending is None:
+        return None
+    return {
+        "attacker": pending.attacker.value,
+        "defender": pending.defender.value,
+        "card_key": pending.card_key,
+        "card_name": pending.card_name,
+        "damage": pending.damage,
+    }
+
+
+def _pending_attack_from_payload(payload: dict | None) -> PendingAttack | None:
+    if payload is None:
+        return None
+    # 旧存档只可能存着"电脑打玩家"这一种待响应事件，缺字段时照此补齐。
+    return PendingAttack(
+        attacker=Side(payload.get("attacker", Side.ENEMY.value)),
+        defender=Side(payload.get("defender", Side.PLAYER.value)),
+        card_key=payload["card_key"],
+        card_name=payload["card_name"],
+        damage=payload["damage"],
+    )
 
 
 def _participant_from_payload(payload: dict) -> ParticipantState:

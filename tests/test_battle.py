@@ -1,7 +1,8 @@
 import random
+from collections import Counter
 
 from game.battle import ROUND_LIMIT, BattleState
-from game.catalog import FIXED_DECK_KEYS, HEROES
+from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
 from game.models import AIDifficulty, BattlePhase, Side
 
 
@@ -196,6 +197,8 @@ def test_damage_uses_shield_before_health():
 def test_playing_a_card_spends_energy_moves_card_and_writes_log():
     battle = make_battle()
     battle.hand = [{"id": "player-slash", "key": "slash"}]
+    # 电脑手里有闪避就会开响应窗口，这里要验证的是伤害当场结算。
+    battle.enemy_hand = []
     hp_before = battle.enemy.hp
     result = battle.play_card("player-slash")
     assert result.ok is True
@@ -231,6 +234,7 @@ def test_finished_battle_rejects_further_card_actions():
     battle = make_battle()
     battle.enemy.hp = 1
     battle.hand = [{"id": "player-slash", "key": "slash"}]
+    battle.enemy_hand = []
     assert battle.play_card("player-slash").ok is True
     result = battle.play_card("player-slash")
     assert result.ok is False
@@ -303,6 +307,7 @@ def test_terminal_state_rejects_end_turn_and_skill():
     battle = make_battle()
     battle.enemy.hp = 1
     battle.hand = [{"id": "player-slash", "key": "slash"}]
+    battle.enemy_hand = []
     battle.play_card("player-slash")
     assert battle.end_player_turn().ok is False
     assert battle.use_skill().ok is False
@@ -346,8 +351,8 @@ def test_enemy_attack_pauses_for_available_dodge_without_dealing_damage():
     assert battle.phase is BattlePhase.RESPONSE
     assert battle.player.hp == 32
     assert battle.player.energy == 2
-    assert battle.pending_attack["card_name"] == "重击"
-    assert battle.pending_attack["damage"] == 10
+    assert battle.pending_attack.card_name == "重击"
+    assert battle.pending_attack.damage == 10
 
 
 def test_using_dodge_cancels_attack_and_starts_next_player_turn():
@@ -553,3 +558,142 @@ def test_enemy_skill_cannot_be_used_twice_in_the_same_turn():
 
     assert second.ok is False
     assert second.message == "本回合技能已经使用过"
+
+
+# --- Task 4: 双方对等的攻击响应 ---
+
+
+def test_enemy_can_dodge_a_player_attack_with_retained_energy():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [{"id": "player-heavy", "key": "heavy_strike"}]
+    before = battle.enemy.hp
+
+    result = battle.play_card("player-heavy")
+
+    assert result.ok is True
+    assert battle.enemy.hp == before
+    assert battle.enemy.energy == 0
+    assert "dodge" in battle.enemy_discard_pile
+    assert battle.pending_attack is None
+    assert battle.enemy_hand == []
+
+
+def test_enemy_without_energy_cannot_dodge_and_takes_the_damage():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 0
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [{"id": "player-slash", "key": "slash"}]
+    before = battle.enemy.hp
+
+    battle.play_card("player-slash")
+
+    assert battle.enemy.hp == before - 6
+    assert [card["key"] for card in battle.enemy_hand] == ["dodge"]
+    assert battle.pending_attack is None
+
+
+def test_one_attack_opens_exactly_one_response_window():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [{"id": "player-slash", "key": "slash"}]
+
+    battle.play_card("player-slash")
+
+    # 电脑用掉唯一一张闪避之后，这次攻击没有第二个响应窗口。
+    later = battle.respond("dodge")
+    assert later.ok is False
+    assert later.message == "当前没有需要响应的攻击"
+    assert battle.pending_attack is None
+
+
+def test_player_keeps_the_turn_after_the_enemy_dodges():
+    battle = make_battle()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [
+        {"id": "player-slash", "key": "slash"},
+        {"id": "player-heavy", "key": "heavy_strike"},
+    ]
+    before = battle.enemy.hp
+
+    assert battle.play_card("player-slash").ok is True
+    assert battle.phase is BattlePhase.PLAYER_TURN
+
+    # 闪避没有中断玩家自己的行动回合，他还能接着打出第二张牌。
+    assert battle.play_card("player-heavy").ok is True
+    assert battle.enemy.hp == before - 10
+    assert battle.player.energy == 0
+
+
+def test_responding_for_the_wrong_side_is_rejected():
+    battle = make_battle()
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+    battle.end_player_turn()
+    withhold_enemy_skill(battle)
+    battle.resolve_enemy_turn()
+
+    result = battle.respond_for(Side.ENEMY, "dodge")
+
+    assert result.ok is False
+    assert result.message == "这次攻击不是针对你的"
+    assert battle.phase is BattlePhase.RESPONSE
+
+
+def assert_consistent(battle):
+    """响应窗口只在有待响应攻击时存在；能量不为负；双方牌数守恒。"""
+    pending = battle.pending_attack
+    in_response = battle.phase is BattlePhase.RESPONSE
+    assert in_response == (pending is not None), battle.phase
+    if pending is not None:
+        assert pending.defender is not pending.attacker
+    for side in (Side.PLAYER, Side.ENEMY):
+        participant = battle.participant(side)
+        assert participant.combatant.energy >= 0, (side, participant.combatant)
+        keys = (
+            Counter(card["key"] for card in participant.hand)
+            + Counter(participant.draw_pile)
+            + Counter(participant.discard_pile)
+        )
+        # 攻击挂起时那张牌已经在弃牌区，所以任何时刻都应当正好是整副牌。
+        assert keys == Counter(FIXED_DECK_KEYS), (side, keys)
+
+
+def test_random_play_stays_consistent_through_both_sides_responses():
+    """随机对局覆盖双方闪避 / 放弃的递归续跑，守住不变量而不是某条固定路径。"""
+    rng = random.Random(20260920)
+    for _ in range(60):
+        battle = BattleState.create(
+            rng.choice(["warrior", "mage", "ranger"]),
+            rng,
+            rng.choice(list(AIDifficulty)),
+        )
+        assert_consistent(battle)
+        for _ in range(120):
+            if battle.is_finished():
+                break
+            if battle.phase is BattlePhase.RESPONSE:
+                battle.respond("dodge" if rng.random() < 0.5 else "pass")
+            else:
+                side = battle.current_side()
+                affordable = [
+                    card
+                    for card in battle.participant(side).hand
+                    if CARDS[card["key"]].effect_type != "dodge"
+                    and CARDS[card["key"]].cost
+                    <= battle.participant(side).combatant.energy
+                ]
+                if affordable and rng.random() < 0.7:
+                    battle.play_card_for(side, rng.choice(affordable)["id"])
+                elif rng.random() < 0.5:
+                    battle.use_skill_for(side)
+                else:
+                    battle.end_turn_for(side)
+            assert_consistent(battle)

@@ -304,7 +304,7 @@ git commit -m "feat: give both sides equal cards skills and pass actions"
 - Consumes: Task 3 的 `play_card_for()` 和 AI 候选模型。
 - Produces: `PendingAttack(attacker: Side, defender: Side, card_key: str, card_name: str, damage: int)`、`respond_for(side, action)`、`choose_enemy_response(observation, rng)`。
 
-- [ ] **Step 1: 写双方均可闪避的失败测试**
+- [x] **Step 1: 写双方均可闪避的失败测试**
 
 ```python
 def test_enemy_can_dodge_a_player_attack_with_retained_energy():
@@ -321,32 +321,49 @@ def test_enemy_can_dodge_a_player_attack_with_retained_energy():
 
 再覆盖：玩家闪避电脑攻击、任意一击只响应一次、无能量时不能闪避、放弃后护盾优先吸收伤害、电脑闪避后玩家仍可继续自己的行动回合。
 
-- [ ] **Step 2: 运行响应测试，确认当前只会为玩家创建 `RESPONSE`**
+- [x] **Step 2: 运行响应测试，确认当前只会为玩家创建 `RESPONSE`**
 
 Run: `pytest tests/test_battle.py tests/test_ai.py -q`
 
 Expected: 电脑闪避测试失败，玩家攻击立即结算。
 
-- [ ] **Step 3: 以攻击方 / 防御方建立待响应事件**
+- [x] **Step 3: 以攻击方 / 防御方建立待响应事件**
 
 攻击牌从攻击方手牌移到弃牌区、扣除能量后，创建 `PendingAttack`。若防御方有闪避和足够能量：防御方为玩家时进入现有 UI 等待；防御方为电脑时调用 AI 响应选择。若没有可用闪避，立即按护盾优先规则结算。
 
-- [ ] **Step 4: 让 AI 对“闪避 / 放弃”评分**
+- [x] **Step 4: 让 AI 对“闪避 / 放弃”评分**
 
 电脑响应候选只包含 `dodge` 和 `pass`。闪避分数基于本次可抵消的实际生命伤害与剩余能量价值；简单难度允许偶尔放弃，中等/困难在高实际伤害时优先闪避。不得为电脑自动免费闪避。
 
-- [ ] **Step 5: 运行响应回归测试**
+- [x] **Step 5: 运行响应回归测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 两边拥有相同的闪避资格、费用和弃牌去向；没有嵌套响应或重复扣费。
 
-- [ ] **Step 6: 提交通用响应改动**
+- [x] **Step 6: 提交通用响应改动**
 
 ```bash
 git add game/models.py game/battle.py game/ai.py tests/test_ai.py tests/test_battle.py
 git commit -m "feat: make dodge responses symmetric"
 ```
+
+**验收记录（Task 4）**
+
+- 实现要点：新增不可变 `PendingAttack(attacker, defender, card_key, card_name, damage)` 取代原来的裸 dict；`play_card_for()` 的伤害牌分支改走 `_open_response()`——攻击方先扣能量、弃牌，再由防御方决定这次伤害落不落地，**付过的费用不退还**。防御方有闪避且能量够时：是玩家就停在 `RESPONSE` 等 UI，是电脑就当场调 `choose_enemy_response()`；没有可用闪避就立刻 `_resolve_damage()` 按护盾优先结算，根本不产生响应窗口。`_finish_response()` 把回合交还攻击方，攻击方是电脑时接着 `_run_enemy_actions()` 跑完它剩下的行动，旧的 `_resume_enemy_turn()` / `_play_enemy_card()` 随之删除。
+- AI 侧：`score_dodge()` 只给真正会掉的生命计分（先扣护盾吸收、再按剩余生命封顶，与 `apply_damage()` 的护盾优先语义一致）；响应候选只有 `dodge` / `pass`，复用同一张 `DIFFICULTY_SELECTION` 权重表，没有单独的闪避阈值表（决策 6）。`_select()` 拆出 `_weighted_pick()`：出牌仍过滤"不优于空过"的候选，响应不过滤——放弃响应只是挨这一下、闪避牌还留在手里，本身就是合法选择；这也是"简单难度允许偶尔放弃"的落点。**没有给电脑任何免费闪避**：它同样扣 1 点能量、同样把闪避牌送进弃牌区，冒烟逐次核对。
+- 门槛：`python -m compileall app.py api_routes.py demo_routes.py web_support.py game`、`ruff check .`、`ruff format --check .` 全绿；`pytest -v` **150 passed**（Task 3 末是 134），全量连跑 10 轮 0 失败。新增 16 个测试：`tests/test_battle.py` 6 个（电脑留能量闪避、无能量不能闪避、一次攻击只开一个窗口、电脑闪避后玩家继续自己的回合、代另一侧响应被拒、随机对局不变量），`tests/test_ai.py` 8 个（闪避只算真会掉的血、护盾全吸时闪避 0 分且排在放弃之后、**任何难度都不花零收益的闪避**、**只剩 1 点能量时放弃小伤害**、困难必闪、简单会偶尔放弃、响应候选只有两个、评分不改状态），`tests/test_session_state.py` 2 个（对称 `PendingAttack` 往返、旧格式缺 attacker/defender 时补成"电脑打玩家"）。`test_random_play_stays_consistent_through_both_sides_responses` 用固定种子跑 60 局随机动作，每步断言"`RESPONSE` ⟺ 有挂起攻击"、能量不为负、**双方手牌 + 抽牌堆 + 弃牌区恒等于整副 13 张**（攻击挂起时那张已在弃牌区，所以任何时刻都成立）——它是这次唯一的递归/重入防线，比逐条固定路径更能守住不变量。
+- 真实的非 test-client HTTP 冒烟（`%TEMP%\smoke_task4.py`，60 + 50 局）：玩家攻击 104~120 次里电脑闪避 7~16 次（9%~15%，同一脚本多次跑的噪声），**每次闪避都恰好扣 1 点能量、电脑生命不变、攻击方费用照扣，0 违规**；响应窗口 23~30 个，**全部只在防御方有闪避与能量时才打开**；玩家侧的闪避与放弃都覆盖到。按"电脑开始行动"切段审计：每张卡牌攻击都恰好结算一次（要么写"造成伤害"，要么紧跟一条闪避记录），且**日志里的伤害总量与该回合玩家护盾 + 生命的实际减少量逐局相等**。页面冒烟：`/demo` 含难度选项、`/demo/heroes` 含确认角色、`/demo/battle` 六个标记齐全、`/` 健康检查 200。审查整改后重启服务（只有一个实例、`use_reloader=False`）重跑：107 次攻击 / 电脑闪避 16 次 / 两段违规均为 0。
+- 平衡探针（`%TEMP%\balance_probe7.py`，120 局/格，与 Task 3 同一个脚本、同一套贪心玩家策略，只换了代码）——**电脑拿到闪避后玩家胜率小幅下降，没有结构性变化**：战士 胜 0.8% / 负 28.3~30.8% / 平 68.3~70.8% / 9.2 回合 → 胜 0~0.8% / 负 30.8~33.3% / 平 66.7~68.3% / 9.1~9.2 回合；法师 胜 44.2~48.3% → 38.3~43.3%；游侠 胜 22.5~24.2% → 17.5~18.3%。龟缩变体（只叠盾 + 技能、不进攻，因此吃不到闪避收益）几乎原样：战士 负 35%、游侠 负 95%、法师 负 73%。难度轴仍拉不开（战士三档负 30.8 / 33.3 / 31.7），先手仍占优（玩家先手 负 23.3% / 平 75.0%，玩家后手 负 40.0% / 平 60.0%）。**审查后修完"零收益闪避"又复跑一次同一脚本**：战士 负 30.8 / 32.5 / 31.7、平 67.5~68.3、9.1~9.2 回合；法师 胜 38.3~43.3；游侠 胜 17.5~18.3；龟缩 战士 负 35.0 / 法师 负 73.3 / 游侠 负 95.0；先手 负 23.3 平 75.0 / 后手 负 40.0 平 60.0——**逐格都在噪声范围内，没有可观测变化**（该修复只影响"电脑带着护盾进玩家回合、又正好有闪避与能量、且这次伤害被护盾全吃掉"这一窄情形）。
+- 探针发现（留给 Task 5/6 的背景，本轮不改评分常数，见决策 6/7）：电脑的闪避资格在实战里**很少成立**——玩家回合开始时它 0 能量的样本占多数（in-process 405/520，HTTP 口径 87/169），因为它在自己回合把 3 点能量花光，而 `score_pass()` 的 `DODGE_HOLD_BONUS = 3.0` 挡得住低收益动作（护盾经 `SHIELD_SCALE` 衰减后仍值 6.0，照样打出去）、挡不住斩击（9.0）。所以"留能量反制"目前基本只是玩家的策略空间，不是电脑的。这是平衡问题不是规则问题。
+- 范围说明（既有设计，本次不动）：**英雄技能的伤害不经过响应窗口**，两边一致——技能不是卡牌，没有"被闪掉的牌"这个语义，`use_skill_for()` 是 Task 3 建立的双向接口，本轮不扩它的签名。
+- 审查整改（`python-reviewer`，独立复跑 148 passed / ruff 全绿，另确认了三件事：`_run_enemy_actions()` 遇响应提前收工、没有重复结算或重复扣费；`HAND_LIMIT + 1` 的循环上界不会被"挂起—续跑"链破坏；旧存档缺 attacker/defender 时默认补成"电脑打玩家"）：
+  - **[已修 · 高] 电脑会为"救不回任何生命"的闪避白扔资源。** 伤害被护盾全吃掉时 `score_dodge()` 是 0.0、`score_pass()` 是 0.5，但 `choose_enemy_response()` 当时把候选整个交给 `_weighted_pick()` 按难度权重抽——实测 200 次里轻松难度抽中 54 次（27%）、中等 27 次（13.5%）白白扣 1 点能量、扔掉一张闪避，困难因为直接取 `ranked[0]` 反而是对的（所以此前的用例没照出它）。修法与出牌侧"不浪费整个回合"同一原则：响应候选里滤掉 `score <= 0` 的闪避，**放弃始终不参与过滤**（决策 4：放弃本身是合法选择）。修复后三档难度 200 次全部放弃，新增 `test_no_difficulty_spends_a_dodge_that_saves_no_health` 钉住。注意措辞：严格说不是"纯亏"——闪避还能保住那层护盾，但评分口径按计划就是用"本次真会掉的生命"算，所以让它别花。
+  - **[不改 · 中] 响应窗口里的"留 1 点能量"加分。** 审查认为 `_holds_the_last_dodge_energy()` 的 3.0 分是为出牌侧设计的、用在响应里是语义错位。**保留**：这个加分在响应语境下同样成立——能量只在电脑自己回合开始回满，此刻花掉最后 1 点，玩家本回合若再打一张伤害牌它就再也闪不动了，正是计划里"中等难度可策略性放弃（手里有闪避、留 1 点能量）"描述的那笔账。新增 `test_hard_gives_up_a_small_hit_to_keep_its_last_energy_for_a_bigger_one` 把这个取舍写成显式契约，避免以后被当成 bug 顺手"修"掉。
+  - **[不改 · 低] 开局那一手仍不对称。** 第一回合电脑抢到时玩家会被自动放弃响应（`create()` 里那处，见下），所以玩家闪不了开局伤害，电脑却闪得了玩家的开局攻击。这是有意的（玩家还没看到场面，不该被要求做决定），记录在此备查。
+- 测试脆弱点：电脑现在会闪避玩家的攻击，凡是"玩家打伤害牌 + 断言伤害当场落地"的用例都必须显式让电脑无法响应——`tests/test_battle.py` 三处改成 `battle.enemy_hand = []`，`tests/test_api.py` / `tests/test_app.py` / `tests/test_acceptance_scenarios.py` 各加一个 `drop_enemy_dodge()` 辅助函数摘掉电脑手里的闪避。这些用例原本就依赖"路由用非种子 RNG"的隐式确定性，不显式控制会像 Task 3 那 12% 抖动一样偶发失败；已按全量 `pytest` 连跑 15 轮、路由用例连跑 40 轮复验，0 失败。
+- 环境问题（不是代码问题）：Task 3 留下的旧 Flask 进程一直占着 5000 端口，第一次冒烟打到了旧进程（Task 4 之前的代码）上，读数全是"电脑闪避 0 次"。杀掉旧进程、只留一个 reloader 关闭的实例后读数正常（9% 左右）。**后续冒烟前先确认端口上只有一个本项目的服务。**
+- 冒烟暴露的既有缺陷（**不是本轮引入，留给 Task 6**）：服务端渲染的老页面 `/demo/battle` 从头到尾没有响应入口——`demo_routes.py` 没有 respond 路由，`templates/battle.html` 里没有闪避/放弃表单，但电脑攻击时 `battle.py` 照样把阶段置成 `RESPONSE`。实测 60 局里 23 局（38%）卡死：页面照常显示"结束回合"，点下去只 flash 一句拒绝，`/demo/restart` 是唯一出路。用 `git worktree` 检出 HEAD（Task 4 之前）重跑同样 60 局，28 局卡死——**HEAD 上早就存在，Task 4 没有让它变差**。修法二选一：给老页面补 respond 路由 + 表单，或在 Task 6 直接用 API 驱动的 `game.html` + `static/game.js` 取代它（后者已经有完整的闪避/放弃按钮，接 `/api/game/actions/respond`）。Task 4 的页面冒烟只查了标记字符串，没走响应路径，所以没提前发现——Task 6 的前端契约测试要按"能打完一整局"来写。
 
 ### Task 5: 建立 AI 信息边界，移除对玩家私有手牌的读取
 

@@ -23,6 +23,12 @@ def side_state(session: dict, side: str) -> dict:
     return session["battle"]["participants"][side]
 
 
+def drop_enemy_dodge(session: dict) -> None:
+    """电脑手里有闪避就能响应玩家的攻击，这里要验证的是伤害当场落地。"""
+    enemy = side_state(session, "enemy")
+    enemy["hand"] = [card for card in enemy["hand"] if card["key"] != "dodge"]
+
+
 def test_acceptance_walk_through():
     from app import create_app  # noqa: PLC0415
 
@@ -70,6 +76,7 @@ def test_acceptance_walk_through():
         enemy = side_state(s, "enemy")
         # 电脑先手时可能已经叠过护盾，护盾现在跨回合保留，先清零才能验证伤害。
         enemy["combatant"]["shield"] = 0
+        drop_enemy_dodge(s)
         enemy_hp_before = enemy["combatant"]["hp"]
         s.modified = True
     client.post("/demo/battle/card/p-s", follow_redirects=True)
@@ -159,6 +166,7 @@ def test_acceptance_walk_through():
         enemy = side_state(s, "enemy")
         enemy["combatant"]["hp"] = 1
         enemy["combatant"]["shield"] = 0
+        drop_enemy_dodge(s)
         side_state(s, "player")["hand"] = [{"id": "p-kill", "key": "slash"}]
         s["battle"]["phase"] = "PLAYER_TURN"
         s.modified = True

@@ -2,7 +2,7 @@ import random
 
 from game.battle import BattleState
 from game.catalog import HEROES
-from game.models import AIDifficulty, BattlePhase, Side
+from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 from game.session_state import clear_battle, load_battle, save_battle
 
 LEGACY_PAYLOAD = {
@@ -94,6 +94,38 @@ def test_saved_battle_round_trips_the_ai_difficulty():
         session, BattleState.create("mage", random.Random(9), AIDifficulty.HARD)
     )
     assert load_battle(session).ai_difficulty is AIDifficulty.HARD
+
+
+def test_saved_battle_round_trips_a_pending_attack_from_either_side():
+    battle = BattleState.create("warrior", random.Random(9), starting_side=Side.PLAYER)
+    battle.pending_attack = PendingAttack(
+        attacker=Side.PLAYER,
+        defender=Side.ENEMY,
+        card_key="heavy_strike",
+        card_name="重击",
+        damage=10,
+    )
+
+    restored = BattleState.from_dict(battle.to_dict())
+
+    assert restored.pending_attack == battle.pending_attack
+    assert restored.pending_attack.attacker is Side.PLAYER
+    assert restored.pending_attack.defender is Side.ENEMY
+
+
+def test_old_pending_attack_payload_still_reads_as_the_enemy_attacking_the_player():
+    payload = dict(LEGACY_PAYLOAD)
+    payload["pending_attack"] = {
+        "card_key": "heavy_strike",
+        "card_name": "重击",
+        "damage": 10,
+    }
+
+    restored = BattleState.from_dict(payload)
+
+    assert restored.pending_attack.attacker is Side.ENEMY
+    assert restored.pending_attack.defender is Side.PLAYER
+    assert restored.pending_attack.damage == 10
 
 
 def test_load_battle_without_a_saved_game_returns_none():

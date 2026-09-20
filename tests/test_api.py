@@ -19,6 +19,12 @@ def side_state(session: dict, side: str) -> dict:
     return session["battle"]["participants"][side]
 
 
+def drop_enemy_dodge(session: dict) -> None:
+    """电脑手里有闪避就能响应玩家的攻击，这里要验证的是伤害当场落地。"""
+    enemy = side_state(session, "enemy")
+    enemy["hand"] = [card for card in enemy["hand"] if card["key"] != "dodge"]
+
+
 def freeze_enemy_hand(session: dict, hand: list[dict]) -> None:
     """锁死电脑手牌：抽牌区和弃牌区清空后，它回合开始的补牌就抽不到东西。"""
     enemy = side_state(session, "enemy")
@@ -106,6 +112,7 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
         side_state(session, "player")["hand"] = [{"id": "player-slash", "key": "slash"}]
         # 电脑先手时可能已经给自己叠了护盾，护盾现在会跨回合保留，先清零才好验证伤害。
         side_state(session, "enemy")["combatant"]["shield"] = 0
+        drop_enemy_dodge(session)
         session.modified = True
     state = client.get("/api/game").get_json()["data"]
     card_id = next(card["id"] for card in state["hand"] if card["key"] == "slash")

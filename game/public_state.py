@@ -1,6 +1,6 @@
 from game.battle import BattleState
 from game.catalog import CARDS
-from game.models import BattlePhase, CardDefinition, Combatant, HeroDefinition
+from game.models import BattlePhase, CardDefinition, Combatant, HeroDefinition, Side
 
 
 def _hero_to_dict(hero: HeroDefinition) -> dict:
@@ -37,6 +37,10 @@ def _combatant_to_dict(combatant: Combatant) -> dict:
 def public_battle_state(battle: BattleState) -> dict:
     is_player_turn = battle.phase is BattlePhase.PLAYER_TURN
     pending_attack = battle.pending_attack
+    # 电脑做防御方时响应在结算里当场定夺，不会挂起，所以只有玩家被攻击时才需要页面问响应。
+    player_is_defending = (
+        pending_attack is not None and pending_attack.defender is Side.PLAYER
+    )
     return {
         "phase": battle.phase.value,
         "round_number": battle.round_number,
@@ -56,9 +60,9 @@ def public_battle_state(battle: BattleState) -> dict:
             "used_this_turn": battle.skill_used_this_turn,
         },
         "response": {
-            "active": pending_attack is not None,
-            "card_name": pending_attack["card_name"] if pending_attack else None,
-            "damage": pending_attack["damage"] if pending_attack else 0,
+            "active": player_is_defending,
+            "card_name": pending_attack.card_name if player_is_defending else None,
+            "damage": pending_attack.damage if player_is_defending else 0,
             "dodge_cost": CARDS["dodge"].cost,
         },
         "available_actions": {
@@ -72,7 +76,7 @@ def public_battle_state(battle: BattleState) -> dict:
             "end_turn": is_player_turn and not battle.is_finished(),
             "respond": {
                 "dodge": battle.can_dodge(),
-                "pass": battle.phase is BattlePhase.RESPONSE,
+                "pass": player_is_defending,
             },
         },
         "log": list(battle.log),

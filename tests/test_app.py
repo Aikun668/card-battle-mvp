@@ -18,6 +18,12 @@ def side_state(session: dict, side: str) -> dict:
     return session["battle"]["participants"][side]
 
 
+def drop_enemy_dodge(session: dict) -> None:
+    """电脑手里有闪避就能响应玩家的攻击，这里要验证的是伤害当场落地。"""
+    enemy = side_state(session, "enemy")
+    enemy["hand"] = [card for card in enemy["hand"] if card["key"] != "dodge"]
+
+
 def test_start_page_and_hero_page_render(tmp_path):
     client = make_client(tmp_path)
     assert client.get("/demo").status_code == 200
@@ -96,6 +102,7 @@ def test_match_result_written_to_sqlite_exactly_once(tmp_path):
         enemy = side_state(s, "enemy")
         enemy["combatant"]["hp"] = 1
         enemy["combatant"]["shield"] = 0
+        drop_enemy_dodge(s)
         side_state(s, "player")["hand"] = [{"id": "x", "key": "slash"}]
         s.modified = True
     client.post("/demo/battle/card/x")  # kills enemy -> VICTORY -> writes to DB
