@@ -4,6 +4,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 
 from game.battle import BattleState
 from game.catalog import CARDS, HEROES
+from game.models import BattlePhase
 from game.session_state import clear_battle, load_battle, save_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
 
@@ -73,9 +74,9 @@ def create_demo_blueprint() -> Blueprint:
             flash(result.message)
             persist_battle(session, battle)
             return redirect(url_for("demo.battle_view"))
-        enemy_result = battle.resolve_enemy_turn()
-        if not enemy_result.ok:
-            flash(enemy_result.message)
+        # 打满回合上限时玩家结束回合就直接判平局，没有电脑回合可跑。
+        if battle.phase is BattlePhase.ENEMY_TURN:
+            battle.resolve_enemy_turn()
         persist_battle(session, battle)
         if battle.is_finished():
             return redirect(url_for("demo.result_view"))

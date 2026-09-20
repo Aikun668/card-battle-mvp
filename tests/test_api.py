@@ -1,4 +1,6 @@
 from app import create_app
+from game.battle import ROUND_LIMIT
+from game.catalog import HEROES
 
 
 def make_client(tmp_path):
@@ -23,6 +25,23 @@ def freeze_enemy_hand(session: dict, hand: list[dict]) -> None:
     enemy["hand"] = hand
     enemy["draw_pile"] = []
     enemy["discard_pile"] = []
+
+
+# 电脑英雄是随机的，法师技能（2 费 10 伤）与重击同分，会挤进随机池；
+# 固定成战士后它的 8 点护盾技能低于下面两张重击，随机池里只剩伤害牌。
+ENEMY_DOUBLE_HEAVY = [
+    {"id": "enemy-heavy-1", "key": "heavy_strike"},
+    {"id": "enemy-heavy-2", "key": "heavy_strike"},
+]
+
+
+def pin_enemy_warrior(session: dict) -> None:
+    """把电脑钉成满血战士，让它的技能评分稳定落在两张重击之下。"""
+    enemy = side_state(session, "enemy")
+    hero = HEROES["warrior"]
+    enemy["hero_key"] = hero.key
+    enemy["combatant"]["max_hp"] = hero.max_hp
+    enemy["combatant"]["hp"] = hero.max_hp
 
 
 def test_root_is_backend_health_metadata_and_demo_is_explicit(tmp_path):
@@ -112,6 +131,24 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     assert after_turn["player"]["energy"] == 3
 
 
+def test_api_end_turn_on_the_last_round_returns_a_draw_instead_of_an_error(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+    with client.session_transaction() as session:
+        battle = session["battle"]
+        # 让玩家当后手方：他结束回合就正好打满 10 回合，平局由这一步判定，
+        # 后面没有电脑回合可跑，接口不该把它当成动作失败。
+        battle["starting_side"] = "enemy"
+        battle["round_number"] = ROUND_LIMIT
+        battle["phase"] = "PLAYER_TURN"
+        session.modified = True
+
+    response = client.post("/api/game/actions/end-turn")
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["phase"] == "DRAW"
+
+
 def test_create_game_defaults_to_medium_ai_difficulty(tmp_path):
     client = make_client(tmp_path)
 
@@ -199,7 +236,8 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
         player = side_state(session, "player")
         player["combatant"]["energy"] = 2
         player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        freeze_enemy_hand(session, [{"id": "enemy-heavy", "key": "heavy_strike"}])
+        freeze_enemy_hand(session, ENEMY_DOUBLE_HEAVY)
+        pin_enemy_warrior(session)
         hp_before = player["combatant"]["hp"]
         session.modified = True
 
@@ -242,7 +280,8 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
         player["combatant"]["energy"] = 1
         player["combatant"]["shield"] = 4
         player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        freeze_enemy_hand(session, [{"id": "enemy-heavy", "key": "heavy_strike"}])
+        freeze_enemy_hand(session, ENEMY_DOUBLE_HEAVY)
+        pin_enemy_warrior(session)
         hp_before = player["combatant"]["hp"]
         session.modified = True
 

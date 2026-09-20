@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, request, session
 
 from game.battle import BattleState
 from game.catalog import CARDS, HEROES
-from game.models import AIDifficulty
+from game.models import AIDifficulty, BattlePhase
 from game.public_state import public_battle_state
 from game.session_state import clear_battle, load_battle, save_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
@@ -136,15 +136,10 @@ def create_api_blueprint() -> Blueprint:
                 status=422,
                 data=public_battle_state(battle),
             )
-        enemy_result = battle.resolve_enemy_turn()
+        # 打满回合上限时玩家结束回合就直接判平局，没有电脑回合可跑。
+        if battle.phase is BattlePhase.ENEMY_TURN:
+            battle.resolve_enemy_turn()
         persist_battle(session, battle)
-        if not enemy_result.ok:
-            return error_response(
-                "ACTION_REJECTED",
-                enemy_result.message,
-                status=422,
-                data=public_battle_state(battle),
-            )
         return response(public_battle_state(battle))
 
     @api.post("/game/actions/respond")

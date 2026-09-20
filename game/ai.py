@@ -2,15 +2,17 @@ import random
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from game.catalog import CARDS, STARTING_ENERGY
-from game.models import AIDifficulty, CardDefinition
+from game.catalog import CARDS, SKILL_COST, STARTING_ENERGY
+from game.models import AIDifficulty, CardDefinition, HeroDefinition, Side
 
-# 电脑没有英雄技能，也无法主动打出只能在响应时机使用的牌。
+# 闪避只能在响应时机使用，不进入主动出牌候选。
 ENEMY_UNUSABLE_EFFECTS = frozenset({"dodge"})
 
 LETHAL_BONUS = 1000.0
 EFFICIENCY_WEIGHT = 0.5
 PASS_SCORE = 0.5
+# 手里留着闪避时，最后 1 点能量的价值高于任何低收益动作。
+DODGE_HOLD_BONUS = 3.0
 # 削掉护盾是通往击杀的进度，但本身不扣血，所以单价明显低于真实伤害；
 # 若记 0 分，电脑面对高护盾玩家会永远选择空过，直接放弃获胜。
 SHIELD_BREAK_WEIGHT = 0.4
@@ -22,6 +24,9 @@ DANGER_PENALTY = 100.0
 
 DEFENSIVE_EFFECTS = frozenset({"shield", "heal"})
 
+# 技能按等效卡牌参与评分：护盾类算护盾牌，其余（含伤害加抽牌）算伤害牌。
+SKILL_EFFECT_TYPES = {"shield": "shield", "damage": "damage", "damage_draw": "damage"}
+
 DIFFICULTY_SELECTION: dict[AIDifficulty, tuple[float, ...]] = {
     AIDifficulty.EASY: (0.60, 0.25, 0.15),
     AIDifficulty.MEDIUM: (0.88, 0.12),
@@ -30,21 +35,45 @@ DIFFICULTY_SELECTION: dict[AIDifficulty, tuple[float, ...]] = {
 
 @dataclass(frozen=True)
 class ActionCandidate:
-    kind: Literal["card", "pass"]
+    kind: Literal["card", "skill", "pass"]
     card_id: str | None = None
     card_key: str | None = None
     score: float = 0.0
 
 
 def get_available_enemy_actions(state) -> list[ActionCandidate]:
+    participant = state.participant(Side.ENEMY)
     candidates = [
         ActionCandidate(kind="card", card_id=card["id"], card_key=card["key"])
-        for card in state.enemy_hand
+        for card in participant.hand
         if CARDS[card["key"]].effect_type not in ENEMY_UNUSABLE_EFFECTS
-        and CARDS[card["key"]].cost <= state.enemy.energy
+        and CARDS[card["key"]].cost <= participant.combatant.energy
     ]
+    if (
+        not participant.skill_used_this_turn
+        and participant.combatant.energy >= SKILL_COST
+    ):
+        candidates.append(ActionCandidate(kind="skill"))
     candidates.append(ActionCandidate(kind="pass"))
     return candidates
+
+
+def _skill_as_card(hero: HeroDefinition) -> CardDefinition:
+    return CardDefinition(
+        key=hero.key,
+        name=hero.skill_name,
+        cost=SKILL_COST,
+        effect_type=SKILL_EFFECT_TYPES[hero.skill_type],
+        value=hero.skill_value,
+    )
+
+
+def _definition_of(state, candidate: ActionCandidate) -> CardDefinition | None:
+    if candidate.kind == "card":
+        return CARDS[candidate.card_key]
+    if candidate.kind == "skill":
+        return _skill_as_card(state.participant(Side.ENEMY).hero)
+    return None
 
 
 def _risk_multiplier(combatant) -> float:
@@ -75,15 +104,26 @@ def score_shield(state, definition: CardDefinition) -> float:
     return definition.value / diminishing * _risk_multiplier(state.enemy)
 
 
-def score_pass() -> float:
+def _holds_the_last_dodge_energy(state) -> bool:
+    """手里有闪避、能量又只够再打一张牌：再花掉就没法闪避了。"""
+    if state.enemy.energy > CARDS["dodge"].cost:
+        return False
+    return any(card["key"] == "dodge" for card in state.enemy_hand)
+
+
+def score_pass(state, difficulty: AIDifficulty) -> float:
     # 高于任何零收益动作，低于任何有正收益的动作。
+    if difficulty is AIDifficulty.EASY:
+        return PASS_SCORE
+    if _holds_the_last_dodge_energy(state):
+        return PASS_SCORE + DODGE_HOLD_BONUS
     return PASS_SCORE
 
 
-def _base_score(state, candidate: ActionCandidate) -> float:
+def _base_score(state, candidate: ActionCandidate, difficulty: AIDifficulty) -> float:
     if candidate.kind == "pass":
-        return score_pass()
-    definition = CARDS[candidate.card_key]
+        return score_pass(state, difficulty)
+    definition = _definition_of(state, candidate)
     if definition.effect_type == "damage":
         return score_damage(state, definition)
     if definition.effect_type == "heal":
@@ -107,8 +147,8 @@ def estimate_player_threat(state) -> int:
 def _survivable_hp_after(state, candidate: ActionCandidate) -> int:
     hp = state.enemy.hp
     shield = state.enemy.shield
-    if candidate.kind == "card":
-        definition = CARDS[candidate.card_key]
+    definition = _definition_of(state, candidate)
+    if definition is not None:
         if definition.effect_type == "shield":
             shield += definition.value
         elif definition.effect_type == "heal":
@@ -123,10 +163,8 @@ def hard_lookahead_adjustment(state, candidate: ActionCandidate) -> float:
         return 0.0
     if _survivable_hp_after(state, candidate) > threat:
         return 0.0
-    if (
-        candidate.kind == "card"
-        and CARDS[candidate.card_key].effect_type in DEFENSIVE_EFFECTS
-    ):
+    definition = _definition_of(state, candidate)
+    if definition is not None and definition.effect_type in DEFENSIVE_EFFECTS:
         return 0.0
     return -DANGER_PENALTY
 
@@ -134,7 +172,7 @@ def hard_lookahead_adjustment(state, candidate: ActionCandidate) -> float:
 def score_enemy_action(
     state, candidate: ActionCandidate, difficulty: AIDifficulty
 ) -> float:
-    score = _base_score(state, candidate)
+    score = _base_score(state, candidate, difficulty)
     if difficulty is AIDifficulty.HARD:
         score += hard_lookahead_adjustment(state, candidate)
     return score
@@ -156,6 +194,7 @@ def select_enemy_action(
     if weights is None:
         return ranked[0]
     # 比空过更强的动作才参与抽取：简单难度可以选得差，但不该浪费整回合不做任何事。
+    # 战略空过（留能量闪避）分数高于 PASS_SCORE，靠评分自然进池，不是被塞进去的。
     usable = [candidate for candidate in ranked if candidate.score > PASS_SCORE]
     if not usable:
         return ranked[0]

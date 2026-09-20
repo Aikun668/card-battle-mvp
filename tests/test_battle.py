@@ -9,6 +9,16 @@ def make_battle(hero_key="warrior"):
     return BattleState.create(hero_key, random.Random(7), starting_side=Side.PLAYER)
 
 
+def withhold_enemy_skill(battle):
+    """让电脑只出普通牌：技能标记为已用。
+
+    电脑回合开始时 start_turn() 会重置这个标记，所以只在跑电脑回合的用例里、
+    调用 end_player_turn() 之后再屏蔽。
+    """
+    battle.participants[Side.ENEMY].skill_used_this_turn = True
+    return battle
+
+
 def test_new_battle_has_five_cards_three_energy_and_player_turn():
     battle = make_battle()
     assert battle.phase is BattlePhase.PLAYER_TURN
@@ -106,6 +116,7 @@ def test_enemy_shield_persists_across_its_own_turns():
     battle.enemy.shield = 6
     battle.enemy_hand = []
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.resolve_enemy_turn()
     assert battle.enemy.shield == 6
 
@@ -165,7 +176,9 @@ def test_round_limit_lets_each_side_act_ten_times():
                 battle.hand = []
                 battle.end_player_turn()
             else:
+                # 只数回合数，不让电脑的技能把玩家打死影响上限判定。
                 battle.enemy_hand = []
+                withhold_enemy_skill(battle)
                 battle.resolve_enemy_turn()
         assert battle.phase is BattlePhase.DRAW
         assert turns == {Side.PLAYER: ROUND_LIMIT, Side.ENEMY: ROUND_LIMIT}
@@ -326,6 +339,7 @@ def test_enemy_attack_pauses_for_available_dodge_without_dealing_damage():
     battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
 
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     result = battle.resolve_enemy_turn()
 
     assert result.ok is True
@@ -342,6 +356,7 @@ def test_using_dodge_cancels_attack_and_starts_next_player_turn():
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
     battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.resolve_enemy_turn()
 
     result = battle.respond("dodge")
@@ -363,6 +378,7 @@ def test_passing_response_resolves_damage_with_shield_first():
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
     battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.resolve_enemy_turn()
 
     result = battle.respond("pass")
@@ -394,6 +410,7 @@ def test_enemy_attack_resolves_immediately_without_available_dodge():
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
 
     result = battle.resolve_enemy_turn()
 
@@ -401,3 +418,138 @@ def test_enemy_attack_resolves_immediately_without_available_dodge():
     assert battle.phase is BattlePhase.PLAYER_TURN
     assert battle.player.hp == 26
     assert battle.pending_attack is None
+
+
+# --- Task 3: 双方共享的卡牌、技能与结束行动 ---
+
+
+def pin_enemy_hero(battle, hero_key):
+    """固定电脑英雄，避免随机英雄让技能断言漂移。"""
+    battle.participants[Side.ENEMY].hero = HEROES[hero_key]
+    return battle
+
+
+def freeze_enemy_piles(battle):
+    """清空电脑两个牌区：它这一回合补不到新牌，手牌完全由测试决定。"""
+    battle.enemy_hand = []
+    battle.enemy_draw_pile = []
+    battle.enemy_discard_pile = []
+    return battle
+
+
+def test_shared_actions_reject_the_side_that_is_not_acting():
+    battle = make_battle()
+
+    results = (
+        battle.play_card_for(Side.ENEMY, "enemy-slash"),
+        battle.use_skill_for(Side.ENEMY),
+        battle.end_turn_for(Side.ENEMY),
+    )
+
+    for result in results:
+        assert result.ok is False
+        assert result.message == "现在不是电脑的回合"
+
+
+def test_play_card_for_resolves_a_card_for_either_side():
+    battle = make_battle()
+    battle.hand = []
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    battle.end_player_turn()
+    hp_before = battle.player.hp
+
+    result = battle.play_card_for(Side.ENEMY, "enemy-slash")
+
+    assert result.ok is True
+    assert battle.player.hp == hp_before - 6
+    assert battle.enemy.energy == 2
+    assert "电脑使用【斩击】，对你造成 6 点伤害" in battle.log
+
+
+def test_end_turn_for_advances_the_turn_for_either_side():
+    battle = make_battle()
+    battle.hand = []
+
+    assert battle.end_turn_for(Side.PLAYER).ok is True
+    assert battle.phase is BattlePhase.ENEMY_TURN
+
+    freeze_enemy_piles(battle)
+
+    assert battle.end_turn_for(Side.ENEMY).ok is True
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.round_number == 2
+    assert battle.player.energy == 3
+
+
+def test_enemy_can_use_its_own_hero_skill_once_per_turn():
+    battle = pin_enemy_hero(make_battle("warrior"), "mage")
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.hand = []
+    freeze_enemy_piles(battle)
+    battle.end_player_turn()
+
+    result = battle.resolve_enemy_turn()
+
+    assert result.ok is True
+    assert battle.player.hp == 32 - 10
+    assert battle.enemy.energy == 1
+    assert battle.participant(Side.ENEMY).skill_used_this_turn is True
+    assert "电脑释放技能【火球术】，对你造成 10 点伤害" in battle.log
+
+
+def test_enemy_warrior_skill_shields_instead_of_attacking():
+    battle = pin_enemy_hero(make_battle("mage"), "warrior")
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.hand = []
+    freeze_enemy_piles(battle)
+    battle.end_player_turn()
+
+    battle.resolve_enemy_turn()
+
+    assert battle.enemy.shield == 8
+    assert battle.player.hp == battle.player.max_hp
+
+
+def test_enemy_ranger_skill_damages_and_draws_a_card():
+    battle = pin_enemy_hero(make_battle("warrior"), "ranger")
+    battle.hand = []
+    battle.enemy_hand = []
+    battle.end_player_turn()
+    # 回合开始的补牌已经错过，这张留给技能自己抽。
+    battle.enemy_draw_pile = ["slash"]
+    hp_before = battle.player.hp
+
+    result = battle.use_skill_for(Side.ENEMY)
+
+    assert result.ok is True
+    assert battle.player.hp == hp_before - 6
+    assert [card["key"] for card in battle.enemy_hand] == ["slash"]
+    assert battle.enemy.energy == 1
+
+
+def test_enemy_skill_and_cards_share_the_same_three_energy():
+    battle = pin_enemy_hero(make_battle("warrior"), "mage")
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.hand = []
+    freeze_enemy_piles(battle)
+    battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+
+    battle.resolve_enemy_turn()
+
+    # 火球术花掉 2 点，剩 1 点刚好够斩击，两次行动共用同一份能量。
+    assert battle.enemy.energy == 0
+    assert battle.player.hp == 32 - 10 - 6
+
+
+def test_enemy_skill_cannot_be_used_twice_in_the_same_turn():
+    battle = pin_enemy_hero(make_battle("warrior"), "mage")
+    battle.hand = []
+    freeze_enemy_piles(battle)
+    battle.end_player_turn()
+
+    assert battle.use_skill_for(Side.ENEMY).ok is True
+    second = battle.use_skill_for(Side.ENEMY)
+
+    assert second.ok is False
+    assert second.message == "本回合技能已经使用过"

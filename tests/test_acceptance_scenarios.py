@@ -54,7 +54,10 @@ def test_acceptance_walk_through():
         assert s["battle"]["phase"] == "PLAYER_TURN"
         assert s["battle"]["starting_side"] in ("player", "enemy")
         if s["battle"]["starting_side"] == "enemy":
-            assert any(e.startswith("电脑使用") for e in s["battle"]["log"])
+            # 电脑先手时开局那一手可能是普通牌，也可能是英雄技能。
+            assert any(
+                e.startswith(("电脑使用", "电脑释放技能")) for e in s["battle"]["log"]
+            )
         assert 0 < player["combatant"]["hp"] <= player["combatant"]["max_hp"]
         assert enemy["hero_key"] in HEROES
         assert enemy["combatant"]["hp"] == enemy["combatant"]["max_hp"]
@@ -110,11 +113,18 @@ def test_acceptance_walk_through():
         s["battle"]["round_number"] = 1
         player = side_state(s, "player")
         enemy = side_state(s, "enemy")
+        # 电脑也能用英雄技能了。把它固定成满血战士（8 点护盾技能，评分 8 低于斩击的 9），
+        # 中等难度取分数最高的两个候选时它永远进不了池子，出牌顺序只由这三张斩击决定。
+        # 一旦电脑掉血，风险系数会把护盾技能抬到斩击之上，这里就不能再固定顺序了。
+        enemy["hero_key"] = "warrior"
+        enemy["combatant"]["max_hp"] = 32
+        enemy["combatant"]["hp"] = 32
         enemy["hand"] = [
             {"id": "e-s1", "key": "slash"},
             {"id": "e-s2", "key": "slash"},
+            {"id": "e-s3", "key": "slash"},
         ]
-        # 清空电脑的牌区，它这一回合就补不到新牌，手牌固定为上面两张。
+        # 清空电脑的牌区，它这一回合就补不到新牌，手牌固定为上面三张。
         enemy["draw_pile"] = []
         enemy["discard_pile"] = []
         enemy["combatant"]["shield"] = 0
@@ -124,12 +134,12 @@ def test_acceptance_walk_through():
         s.modified = True
     client.post("/demo/battle/end-turn", follow_redirects=True)
     with client.session_transaction() as s:
-        # 电脑每打完一张牌都重新评分，能量允许时连出两张斩击。
+        # 电脑每打完一张牌都重新评分，3 点能量正好连出三张斩击。
         assert (
-            sum(1 for entry in s["battle"]["log"] if entry.startswith("电脑使用")) == 2
+            sum(1 for entry in s["battle"]["log"] if entry.startswith("电脑使用")) == 3
         )
-        assert side_state(s, "player")["combatant"]["hp"] == 20
-        assert side_state(s, "enemy")["combatant"]["energy"] == 1
+        assert side_state(s, "player")["combatant"]["hp"] == 14
+        assert side_state(s, "enemy")["combatant"]["energy"] == 0
         assert s["battle"]["phase"] == "PLAYER_TURN"
         assert s["battle"]["round_number"] == 2
         assert side_state(s, "player")["combatant"]["energy"] == 3

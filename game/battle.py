@@ -2,7 +2,13 @@ import random
 import uuid
 
 from game.ai import select_enemy_action
-from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES, STARTING_ENERGY
+from game.catalog import (
+    CARDS,
+    FIXED_DECK_KEYS,
+    HEROES,
+    SKILL_COST,
+    STARTING_ENERGY,
+)
 from game.models import (
     AIDifficulty,
     ActionResult,
@@ -24,6 +30,10 @@ LEGACY_ENEMY_HERO_KEY = "warrior"
 OPPONENT_SIDE = {Side.PLAYER: Side.ENEMY, Side.ENEMY: Side.PLAYER}
 TURN_PHASE = {Side.PLAYER: BattlePhase.PLAYER_TURN, Side.ENEMY: BattlePhase.ENEMY_TURN}
 SIDE_PHASE = {phase: side for side, phase in TURN_PHASE.items()}
+# 日志措辞沿用既有文案：玩家出手不写主语，受击写"你"；电脑出手写"电脑"。
+ACTOR_LABEL = {Side.PLAYER: "", Side.ENEMY: "电脑"}
+HIT_LABEL = {Side.PLAYER: "电脑", Side.ENEMY: "你"}
+TURN_LABEL = {Side.PLAYER: "玩家", Side.ENEMY: "电脑"}
 
 
 def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
@@ -200,29 +210,41 @@ class BattleState:
                 return i
         return -1
 
-    def play_card(self, card_instance_id: str) -> ActionResult:
+    def _wrong_turn_message(self, side: Side) -> str:
+        if side is Side.PLAYER:
+            return "现在是电脑回合，请等待电脑行动"
+        return "现在不是电脑的回合"
+
+    def play_card_for(self, side: Side, card_instance_id: str) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
-        if self.phase is not BattlePhase.PLAYER_TURN:
-            return ActionResult(False, "现在是电脑回合，请等待电脑行动")
-        index = self._find_hand_index(self.hand, card_instance_id)
+        if self.current_side() is not side:
+            return ActionResult(False, self._wrong_turn_message(side))
+        participant = self.participant(side)
+        index = self._find_hand_index(participant.hand, card_instance_id)
         if index == -1:
             return ActionResult(False, "这张卡牌已经不能使用")
-        card = self.hand[index]
+        card = participant.hand[index]
         definition = CARDS[card["key"]]
         if definition.effect_type == "dodge":
             return ActionResult(False, "闪避只能在敌人攻击时使用")
-        if self.player.energy < definition.cost:
-            shortage = definition.cost - self.player.energy
+        if participant.combatant.energy < definition.cost:
+            shortage = definition.cost - participant.combatant.energy
             return ActionResult(False, f"能量不足，还差 {shortage} 点")
-        # Now perform the effect
-        self.player.energy -= definition.cost
-        self.hand.pop(index)
-        self.discard_pile.append(definition.key)
-        self._apply_card_effect(definition, source=self.player, target=self.enemy)
-        self.log.append(self._format_card_log(definition))
+        participant.combatant.energy -= definition.cost
+        participant.hand.pop(index)
+        participant.discard_pile.append(definition.key)
+        self._apply_card_effect(
+            definition,
+            source=participant.combatant,
+            target=self.opponent_of(side).combatant,
+        )
+        self.log.append(self._format_card_log(side, definition))
         self._check_terminal()
         return ActionResult(True, "")
+
+    def play_card(self, card_instance_id: str) -> ActionResult:
+        return self.play_card_for(Side.PLAYER, card_instance_id)
 
     def _apply_card_effect(
         self,
@@ -237,47 +259,60 @@ class BattleState:
         elif definition.effect_type == "heal":
             self.apply_heal(source, definition.value)
 
-    def _format_card_log(self, definition: CardDefinition) -> str:
+    def _format_card_log(self, side: Side, definition: CardDefinition) -> str:
+        actor = ACTOR_LABEL[side]
         if definition.effect_type == "damage":
-            return f"使用【{definition.name}】，对电脑造成 {definition.value} 点伤害"
+            target = HIT_LABEL[side]
+            return (
+                f"{actor}使用【{definition.name}】，"
+                f"对{target}造成 {definition.value} 点伤害"
+            )
         if definition.effect_type == "shield":
-            return f"使用【{definition.name}】，获得 {definition.value} 点护盾"
+            return f"{actor}使用【{definition.name}】，获得 {definition.value} 点护盾"
         if definition.effect_type == "heal":
-            return f"使用【{definition.name}】，恢复 {definition.value} 点生命值"
-        return f"使用【{definition.name}】"
+            return f"{actor}使用【{definition.name}】，恢复 {definition.value} 点生命值"
+        return f"{actor}使用【{definition.name}】"
 
-    def use_skill(self) -> ActionResult:
+    def use_skill_for(self, side: Side) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
-        if self.phase is not BattlePhase.PLAYER_TURN:
-            return ActionResult(False, "现在是电脑回合，请等待电脑行动")
-        if self.skill_used_this_turn:
+        if self.current_side() is not side:
+            return ActionResult(False, self._wrong_turn_message(side))
+        participant = self.participant(side)
+        if participant.skill_used_this_turn:
             return ActionResult(False, "本回合技能已经使用过")
-        if self.player.energy < 2:
-            shortage = 2 - self.player.energy
+        if participant.combatant.energy < SKILL_COST:
+            shortage = SKILL_COST - participant.combatant.energy
             return ActionResult(False, f"能量不足，还差 {shortage} 点")
-        skill = self.hero
-        self.player.energy -= 2
-        self.skill_used_this_turn = True
+        skill = participant.hero
+        participant.combatant.energy -= SKILL_COST
+        participant.skill_used_this_turn = True
+        actor = ACTOR_LABEL[side]
         if skill.skill_type == "shield":
-            self.player.shield += skill.skill_value
+            participant.combatant.shield += skill.skill_value
             self.log.append(
-                f"释放技能【{skill.skill_name}】，获得 {skill.skill_value} 点护盾"
+                f"{actor}释放技能【{skill.skill_name}】，"
+                f"获得 {skill.skill_value} 点护盾"
             )
         elif skill.skill_type == "damage":
-            self.apply_damage(self.enemy, skill.skill_value)
+            self.apply_damage(self.opponent_of(side).combatant, skill.skill_value)
             self.log.append(
-                f"释放技能【{skill.skill_name}】，对电脑造成 {skill.skill_value} 点伤害"
+                f"{actor}释放技能【{skill.skill_name}】，"
+                f"对{HIT_LABEL[side]}造成 {skill.skill_value} 点伤害"
             )
         elif skill.skill_type == "damage_draw":
-            self.apply_damage(self.enemy, skill.skill_value)
-            drawn = self.draw_cards(1)
+            self.apply_damage(self.opponent_of(side).combatant, skill.skill_value)
+            drawn = self.draw_cards_for(side, 1)
             extra = "并抽取 1 张牌" if drawn else "但手牌已满，未抽到牌"
             self.log.append(
-                f"释放技能【{skill.skill_name}】，对电脑造成 {skill.skill_value} 点伤害，{extra}"
+                f"{actor}释放技能【{skill.skill_name}】，"
+                f"对{HIT_LABEL[side]}造成 {skill.skill_value} 点伤害，{extra}"
             )
         self._check_terminal()
         return ActionResult(True, "")
+
+    def use_skill(self) -> ActionResult:
+        return self.use_skill_for(Side.PLAYER)
 
     def _check_terminal(self) -> None:
         if self.enemy.hp <= 0:
@@ -315,13 +350,17 @@ class BattleState:
         self.start_turn(next_side, initial=is_game_opening)
         return ActionResult(True, "")
 
-    def end_player_turn(self) -> ActionResult:
+    def end_turn_for(self, side: Side) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
-        if self.phase is not BattlePhase.PLAYER_TURN:
-            return ActionResult(False, "现在是电脑回合，请等待电脑行动")
-        self.log.append(f"第 {self.round_number} 回合结束，电脑开始行动")
+        if self.current_side() is not side:
+            return ActionResult(False, self._wrong_turn_message(side))
+        next_actor = TURN_LABEL[OPPONENT_SIDE[side]]
+        self.log.append(f"第 {self.round_number} 回合结束，{next_actor}开始行动")
         return self.advance_turn()
+
+    def end_player_turn(self) -> ActionResult:
+        return self.end_turn_for(Side.PLAYER)
 
     def resolve_enemy_turn(self) -> ActionResult:
         if self.is_finished():
@@ -338,7 +377,10 @@ class BattleState:
             action = select_enemy_action(self, self.ai_difficulty, self.rng)
             if action.kind == "pass":
                 break
-            self._play_enemy_card(action.card_id)
+            if action.kind == "skill":
+                self.use_skill_for(Side.ENEMY)
+            else:
+                self._play_enemy_card(action.card_id)
             self._check_terminal()
         return self._complete_enemy_turn()
 
@@ -403,36 +445,24 @@ class BattleState:
         return ActionResult(False, "无效的响应操作")
 
     def _play_enemy_card(self, card_instance_id: str) -> None:
-        for i, card in enumerate(self.enemy_hand):
-            if card["id"] == card_instance_id:
-                definition = CARDS[card["key"]]
-                self.enemy.energy -= definition.cost
-                self.enemy_discard_pile.append(definition.key)
-                self.enemy_hand.pop(i)
-                if definition.effect_type == "damage":
-                    if self._has_available_dodge():
-                        self.pending_attack = {
-                            "card_key": definition.key,
-                            "card_name": definition.name,
-                            "damage": definition.value,
-                        }
-                        self.phase = BattlePhase.RESPONSE
-                        return
-                    self.apply_damage(self.player, definition.value)
-                    self.log.append(
-                        f"电脑使用【{definition.name}】，对你造成 {definition.value} 点伤害"
-                    )
-                elif definition.effect_type == "shield":
-                    self.enemy.shield += definition.value
-                    self.log.append(
-                        f"电脑使用【{definition.name}】，获得 {definition.value} 点护盾"
-                    )
-                elif definition.effect_type == "heal":
-                    self.apply_heal(self.enemy, definition.value)
-                    self.log.append(
-                        f"电脑使用【{definition.name}】，恢复 {definition.value} 点生命值"
-                    )
-                return
+        index = self._find_hand_index(self.enemy_hand, card_instance_id)
+        if index == -1:
+            return
+        definition = CARDS[self.enemy_hand[index]["key"]]
+        if definition.effect_type == "damage" and self._has_available_dodge():
+            # 电脑造成伤害前要给玩家的闪避留出响应窗口：费用与弃牌先结清，
+            # 伤害挂起等玩家决定响应，结算时才真正生效。
+            self.enemy.energy -= definition.cost
+            self.enemy_hand.pop(index)
+            self.enemy_discard_pile.append(definition.key)
+            self.pending_attack = {
+                "card_key": definition.key,
+                "card_name": definition.name,
+                "damage": definition.value,
+            }
+            self.phase = BattlePhase.RESPONSE
+            return
+        self.play_card_for(Side.ENEMY, card_instance_id)
 
     def is_finished(self) -> bool:
         return self.phase in (BattlePhase.VICTORY, BattlePhase.DEFEAT, BattlePhase.DRAW)

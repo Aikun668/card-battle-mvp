@@ -224,7 +224,7 @@ git commit -m "feat: unify player and enemy resource rules"
 - Consumes: Task 1 的参与者状态和 Task 2 的通用回合函数。
 - Produces: `play_card_for(side, card_id)`、`use_skill_for(side)`、`end_turn_for(side)`、包含 `card` / `skill` / `pass` 的 `ActionCandidate`。
 
-- [ ] **Step 1: 写电脑技能与真实结束行动失败测试**
+- [x] **Step 1: 写电脑技能与真实结束行动失败测试**
 
 ```python
 def test_enemy_can_use_the_same_hero_skill_once_per_own_turn():
@@ -244,13 +244,13 @@ def test_pass_remains_a_selectable_enemy_candidate_when_a_card_is_playable():
 
 再覆盖战士护盾技能、游侠伤害加抽牌技能、电脑技能和普通卡共用 3 点能量、技能一回合不能重复使用。
 
-- [ ] **Step 2: 运行测试，确认当前 AI 候选只有 `card` 和 `pass` 且电脑没有技能状态**
+- [x] **Step 2: 运行测试，确认当前 AI 候选只有 `card` 和 `pass` 且电脑没有技能状态**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 电脑技能测试失败，候选类型缺少 `skill`。
 
-- [ ] **Step 3: 实现参数化卡牌与技能结算**
+- [x] **Step 3: 实现参数化卡牌与技能结算**
 
 ```python
 def play_card_for(self, side: Side, card_id: str) -> ActionResult: ...
@@ -259,22 +259,37 @@ def use_skill_for(self, side: Side) -> ActionResult: ...
 
 两个函数必须从 `participant(side)` 取手牌、能量、英雄和弃牌区，从 `opponent_of(side)` 取攻击目标。游侠抽牌使用 `draw_cards_for(side, 1)`。现有 `play_card()` 和 `use_skill()` 只作为玩家 API 兼容包装器调用对应通用函数。
 
-- [ ] **Step 4: 扩展 AI 候选与评分**
+- [x] **Step 4: 扩展 AI 候选与评分**
 
 `get_available_enemy_actions()` 枚举电脑费用足够的普通牌、未使用且费用足够的英雄技能、以及始终可选的 `pass`。为技能增加与对应卡牌效果一致的评分入口；`pass` 不得在简单/中等模式被预先过滤，而应通过“保留能量用于闪避、当前无有效收益”等评分参与排序。
 
-- [ ] **Step 5: 运行双方动作测试**
+- [x] **Step 5: 运行双方动作测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 双方均可在自己的回合使用普通牌、一次技能和结束行动；电脑候选不再缺技能或被强制出所有牌。
 
-- [ ] **Step 6: 提交共享动作改动**
+- [x] **Step 6: 提交共享动作改动**
 
 ```bash
 git add game/ai.py game/battle.py tests/test_ai.py tests/test_battle.py
 git commit -m "feat: give both sides equal cards skills and pass actions"
 ```
+
+**验收记录（Task 3）**
+
+- 实际改动文件：`game/battle.py`、`game/ai.py`、`game/catalog.py`（新增 `SKILL_COST = 2`）、`tests/test_battle.py`、`tests/test_ai.py`、`tests/test_acceptance_scenarios.py`、`tests/test_api.py`、`tests/test_app.py`、`api_routes.py`、`demo_routes.py`。提交时把计划里的 `git add` 扩到这四个文件（`game/catalog.py` 装 `SKILL_COST`、验收场景与两个路由测试跟着改动、两个路由文件装下面那个顺带修的 bug）。
+- 实现要点：`play_card_for(side, card_id)` / `use_skill_for(side)` / `end_turn_for(side)` 成为唯一结算入口，玩家侧的 `play_card()` / `use_skill()` / `end_player_turn()` 退化成薄包装；手牌、能量、英雄、弃牌区一律从 `participant(side)` 取，攻击目标从 `opponent_of(side)` 取，游侠抽牌走 `draw_cards_for(side, 1)`。日志措辞靠 `ACTOR_LABEL` / `HIT_LABEL` 两个映射复刻旧文案：玩家出手不写主语、受击写"你"，电脑出手写"电脑"，所以既有日志断言一条没改。
+- AI 侧：`ActionCandidate.kind` 扩成 `card | skill | pass`，技能用 `_skill_as_card()` 折成一张等效卡牌参与同一套评分（护盾类算护盾牌，其余算伤害牌），因此 `_base_score()` / `_survivable_hp_after()` / `hard_lookahead_adjustment()` 都无需分支。`score_pass()` 保留"手里有闪避且能量刚好只剩 1 点"时的 `DODGE_HOLD_BONUS = 3.0`，简单难度不享受该加分。随机抽取仍用 `score > PASS_SCORE` 过滤：普通空过（0.5）进不了池子，战略空过（3.5）靠评分自然进池。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .`（先对 `game/battle.py`、`tests/test_ai.py`、`tests/test_acceptance_scenarios.py` 跑了 `ruff format`）通过、`pytest -q` **134 passed**（Task 2 结束时 119）。
+- 稳定性：路由测试用的是非种子 RNG，跑单次通过不代表稳定。连跑 20 次全量后抓到两个抖动用例——`test_api_pauses_enemy_attack_and_accepts_dodge_response` 与 `test_api_can_pass_enemy_attack_response`：它们把电脑手牌锁成一张重击，而电脑现在有技能，中等难度按 0.88/0.12 从「前二名」里抽，抽到技能（法师技能与重击同分同费）就不发起攻击、永远不会进入 `RESPONSE`，约 12% 的失败率。修法是把手牌锁成两张重击并把电脑钉成满血战士（技能 8.0 分低于两张重击的 12.5/9.1），随机池里只剩伤害牌；随后 30 次全量连跑 0 抖动（`tests/test_api.py` 单文件连跑 15 次也全绿）。
+- 真实的非 test-client HTTP 冒烟（`python -c "create_app().run(...)"` + `urllib`，脚本 `%TEMP%\smoke_task3.py`）：40 局 / 125 个玩家回合，创建接口返回的 phase 恒为 `PLAYER_TURN`（含电脑先手局），电脑最大生命值指纹出现 24/27/32 三种。按"电脑开始行动"切分日志逐段审计，**敌方每个回合花费不超过 3 点能量、技能最多一次，0 违规**；三种英雄技能都在真实日志里出现过（`电脑释放技能【火球术】，对你造成 10 点伤害`、`【守护】…获得 8 点护盾`、`【连射】…造成 6 点伤害，并抽取 1 张牌`），40 局里 29 局电脑用过技能。玩家技能：`POST /api/game/actions/skill` 200（能量 3→1、护盾 0→8，日志 `释放技能【守护】，获得 8 点护盾`），同回合再点 422 `本回合技能已经使用过`；缺 `card_id` 的打牌请求仍是 400 `INVALID_REQUEST`。页面冒烟：`/demo` 含难度选项、`/demo/heroes` 含确认角色、`/demo/battle` 六个状态标记齐全、`/` 健康检查 200。
+- 平衡探针（`%TEMP%\balance_probe7.py`，120 局/格，玩家策略与 Task 2 的 probe5 一致，先手随机）——**Task 2 的平局锁被打破**：战士从 胜 0.8% / 负 0% / **平 99.2%** / 10.0 回合 变成 胜 0.8% / 负 28.3~30.8% / 平 68.3~70.8% / 9.2~9.3 回合；法师 胜 49.2%→44.2~48.3%、游侠 胜 43.3%→22.5~24.2%（胜率下降是因为电脑现在也会用技能了）。龟缩变体（只叠盾+技能不进攻）不再不可战胜：战士 100% 平局 / 0% 战败 → 平 65% / **负 35%**，游侠龟缩 负 95%，法师龟缩 负 73%。**决策 8 的"护盾跨回合是已知风险"因此降级：风险真实存在，但不再由单边技能不对称放大。**
+- 按决策 5 记录「难度 × 电脑英雄」探针（玩家=游侠，120 局/格，胜/负/平）：电脑=法师 35.0~40.0% / 60.0~65.0% / 0%，电脑=游侠 28.6~37.1% / 62.9~71.4% / 0%，电脑=**战士 0.0~4.4% / 80.0~93.3% / 0.0~20.0%**。也就是说"对面是战士"本身就是一档难度（它的 2 费 8 护盾技能太厚），这符合决策 5 的"只记录探针、不要求胜率拉平"，但**下一轮平衡该动的是护盾效率，不是 AI 评分**。
+- 难度轴现状：简单/中等/困难三档在多数格子里差异很小（战士格 28.3% / 28.3% / 30.8% 战败），因为三档的区别只在抽池宽度（3/2/1 名），而困难的一步前瞻惩罚很少被触发。Task 2 记录的"三档读数完全相同"确实被修好了，但分离度仍弱，留给后续难度任务。
+- 先手拆解（玩家=战士，困难 AI）：玩家先手 负 18.3% / 平 80.0%，玩家后手 负 38.3% / 平 61.7%。Task 2 的"平局锁与先手无关"结论依旧成立（锁没了），但电脑拿到技能后**先手重新有了可见优势**，属于正常现象，记录在案。
+- 顺带修掉的产品 bug（冒烟抓到的）：打满 10 回合上限时，玩家结束回合会让 `end_player_turn()` 返回成功并把 phase 置成 `DRAW`，但路由紧接着无脑调用 `resolve_enemy_turn()`，后者因"本局已经结束"返回失败——于是 API 返回 **422 `ACTION_REJECTED`（消息"本局已经结束，请重新开始"）**，demo 路由则把这句话 flash 到平局结果页上。修法是两个 end-turn 路由都只在 `battle.phase is BattlePhase.ENEMY_TURN` 时才跑电脑回合，并删掉那个不可能成立的错误分支（玩家动作明明成功了）。回归测试 `test_api_end_turn_on_the_last_round_returns_a_draw_instead_of_an_error`、`test_end_turn_on_the_last_round_shows_the_draw_result_without_a_flash`，已按 RED→GREEN 验证：把旧错误分支放回去，两个测试都失败。
+- 测试脆弱点：`tests/test_battle.py` / `tests/test_ai.py` 里所有电脑回合测试都要在 `end_player_turn()` **之后**调用 `withhold_enemy_skill()`，因为 `start_turn()` 每个回合开始都会重置技能标记；`test_acceptance_scenarios.py` 的 scenario 3 改成接受 `电脑使用` 或 `电脑释放技能` 两种开局，scenario 7 把电脑钉成满血战士（原因同上面那个 12% 抖动）。
 
 ### Task 4: 通用化攻击响应，并让 AI 拥有闪避选择
 
@@ -289,7 +304,7 @@ git commit -m "feat: give both sides equal cards skills and pass actions"
 - Consumes: Task 3 的 `play_card_for()` 和 AI 候选模型。
 - Produces: `PendingAttack(attacker: Side, defender: Side, card_key: str, card_name: str, damage: int)`、`respond_for(side, action)`、`choose_enemy_response(observation, rng)`。
 
-- [ ] **Step 1: 写双方均可闪避的失败测试**
+- [x] **Step 1: 写双方均可闪避的失败测试**
 
 ```python
 def test_enemy_can_dodge_a_player_attack_with_retained_energy():
@@ -306,27 +321,27 @@ def test_enemy_can_dodge_a_player_attack_with_retained_energy():
 
 再覆盖：玩家闪避电脑攻击、任意一击只响应一次、无能量时不能闪避、放弃后护盾优先吸收伤害、电脑闪避后玩家仍可继续自己的行动回合。
 
-- [ ] **Step 2: 运行响应测试，确认当前只会为玩家创建 `RESPONSE`**
+- [x] **Step 2: 运行响应测试，确认当前只会为玩家创建 `RESPONSE`**
 
 Run: `pytest tests/test_battle.py tests/test_ai.py -q`
 
 Expected: 电脑闪避测试失败，玩家攻击立即结算。
 
-- [ ] **Step 3: 以攻击方 / 防御方建立待响应事件**
+- [x] **Step 3: 以攻击方 / 防御方建立待响应事件**
 
 攻击牌从攻击方手牌移到弃牌区、扣除能量后，创建 `PendingAttack`。若防御方有闪避和足够能量：防御方为玩家时进入现有 UI 等待；防御方为电脑时调用 AI 响应选择。若没有可用闪避，立即按护盾优先规则结算。
 
-- [ ] **Step 4: 让 AI 对“闪避 / 放弃”评分**
+- [x] **Step 4: 让 AI 对“闪避 / 放弃”评分**
 
 电脑响应候选只包含 `dodge` 和 `pass`。闪避分数基于本次可抵消的实际生命伤害与剩余能量价值；简单难度允许偶尔放弃，中等/困难在高实际伤害时优先闪避。不得为电脑自动免费闪避。
 
-- [ ] **Step 5: 运行响应回归测试**
+- [x] **Step 5: 运行响应回归测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 两边拥有相同的闪避资格、费用和弃牌去向；没有嵌套响应或重复扣费。
 
-- [ ] **Step 6: 提交通用响应改动**
+- [x] **Step 6: 提交通用响应改动**
 
 ```bash
 git add game/models.py game/battle.py game/ai.py tests/test_ai.py tests/test_battle.py
@@ -345,7 +360,7 @@ git commit -m "feat: make dodge responses symmetric"
 - Consumes: 双方参与者状态和公开行动日志。
 - Produces: `AIObservation`、`BattleState.enemy_observation()` 和只接受 `AIObservation` 的 `rank_enemy_actions()` / `select_enemy_action()`。
 
-- [ ] **Step 1: 写 AI 不读取玩家私有手牌的失败测试**
+- [x] **Step 1: 写 AI 不读取玩家私有手牌的失败测试**
 
 ```python
 def test_hard_ai_rank_is_unchanged_when_only_hidden_player_hand_changes():
@@ -360,13 +375,13 @@ def test_hard_ai_rank_is_unchanged_when_only_hidden_player_hand_changes():
 
 同时测试 AI 能读取自己的手牌、双方公开生命/护盾/能量/英雄、固定牌表与公开弃牌记录。
 
-- [ ] **Step 2: 运行测试，确认当前困难模式遍历 `state.hand`**
+- [x] **Step 2: 运行测试，确认当前困难模式遍历 `state.hand`**
 
 Run: `pytest tests/test_ai.py -q`
 
 Expected: 隐藏手牌改变时，当前 `estimate_player_threat()` 的排序发生变化。
 
-- [ ] **Step 3: 定义受限观察视图**
+- [x] **Step 3: 定义受限观察视图**
 
 ```python
 @dataclass(frozen=True)
@@ -380,17 +395,17 @@ class AIObservation:
 
 `PublicParticipantState` 只包含英雄 key、生命、护盾、能量、技能是否已使用；绝不能包含对方手牌、对方抽牌堆或其顺序。
 
-- [ ] **Step 4: 用公开威胁估计替代窥视手牌**
+- [x] **Step 4: 用公开威胁估计替代窥视手牌**
 
 困难模式的一步前瞻只根据公开英雄技能、玩家当前公开能量、固定牌表和公开弃牌记录估算“潜在最大威胁”；不能读取玩家当前拥有哪一张。所有 AI 评分与选择函数改为只接收 `AIObservation`。
 
-- [ ] **Step 5: 运行信息边界测试**
+- [x] **Step 5: 运行信息边界测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 私有玩家手牌变化不影响 AI 排名；公开生命、能量或已打出牌变化会影响 AI 排名。
 
-- [ ] **Step 6: 提交信息边界改动**
+- [x] **Step 6: 提交信息边界改动**
 
 ```bash
 git add game/ai.py game/battle.py tests/test_ai.py tests/test_battle.py
@@ -418,7 +433,7 @@ git commit -m "fix: prevent AI from reading hidden player cards"
 - Consumes: Tasks 1–5 的双参与者状态、通用响应和 `AIObservation`。
 - Produces: 不泄露电脑手牌的公开 API；页面上双方对称的英雄/资源/技能信息；唯一的对等规则文档。
 
-- [ ] **Step 1: 写公开状态与隐私边界测试**
+- [x] **Step 1: 写公开状态与隐私边界测试**
 
 ```python
 def test_public_state_shows_both_public_resources_but_not_enemy_hand(client):
@@ -432,25 +447,25 @@ def test_public_state_shows_both_public_resources_but_not_enemy_hand(client):
 
 再覆盖：电脑先手时 `POST /api/game` 返回可保存状态；刷新后双方英雄、能量、技能次数和 pending response 不丢失；旧 session 不返回 500。
 
-- [ ] **Step 2: 运行接口与页面测试，确认当前不公开电脑英雄、能量和技能状态**
+- [x] **Step 2: 运行接口与页面测试，确认当前不公开电脑英雄、能量和技能状态**
 
 Run: `pytest tests/test_api.py tests/test_app.py tests/test_acceptance_scenarios.py -q`
 
 Expected: 新增断言失败。
 
-- [ ] **Step 3: 增量扩展公开 API 与页面**
+- [x] **Step 3: 增量扩展公开 API 与页面**
 
 `public_battle_state()` 为双方各输出 `hero`、`combatant` 与 `skill` 的公开字段；只为玩家输出完整 `hand`。战斗页在电脑区域增加英雄名、能量和技能本回合状态，复用现有视觉语言，不修改 1920×1080 舞台或卡牌素材。
 
-- [ ] **Step 4: 适配创建和演示路由**
+- [x] **Step 4: 适配创建和演示路由**
 
 API 和 demo 创建对局均调用新的 `BattleState.create()`；当电脑先手时，创建流程必须完成其自动行动或返回明确进行中的电脑回合状态。所有玩家动作端点继续只允许玩家一侧调用，电脑动作只能由服务端 AI 驱动。
 
-- [ ] **Step 5: 更新文档与验收清单**
+- [x] **Step 5: 更新文档与验收清单**
 
 删除“电脑固定 28 生命”“电脑不能主动打出闪避”“电脑无英雄技能”“电脑护盾回合开始清零”“玩家固定先手”等旧规则。新增双方英雄、随机先手、共享牌库、双向响应、私有信息边界和难度不作弊的验收项。
 
-- [ ] **Step 6: 完成自动化、真实 HTTP 与人工验收**
+- [x] **Step 6: 完成自动化、真实 HTTP 与人工验收**
 
 Run: `pytest -q`
 

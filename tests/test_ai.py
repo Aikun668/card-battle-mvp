@@ -6,12 +6,28 @@ from game.ai import (
     select_enemy_action,
 )
 from game.battle import BattleState
-from game.catalog import FIXED_DECK_KEYS
+from game.catalog import FIXED_DECK_KEYS, HEROES
 from game.models import AIDifficulty, BattlePhase, Side
 
 
+def withhold_enemy_skill(battle):
+    """把测试隔离在普通牌上：技能标记为已用，本回合不再进入候选。"""
+    battle.participant(Side.ENEMY).skill_used_this_turn = True
+    return battle
+
+
 def make_battle():
-    return BattleState.create("warrior", random.Random(3), starting_side=Side.PLAYER)
+    # 电脑也有英雄技能了，下面这些用例考的是普通牌评分，先把技能隔离掉。
+    return withhold_enemy_skill(
+        BattleState.create("warrior", random.Random(3), starting_side=Side.PLAYER)
+    )
+
+
+def battle_with_enemy_hero(hero_key):
+    """电脑英雄固定下来，专门测试英雄技能的行为。"""
+    battle = BattleState.create("warrior", random.Random(3), starting_side=Side.PLAYER)
+    battle.participants[Side.ENEMY].hero = HEROES[hero_key]
+    return battle
 
 
 def battle_with_three_ranked_choices():
@@ -332,6 +348,7 @@ def test_enemy_re_ranks_actions_after_each_play():
     battle = make_battle()
     battle.ai_difficulty = AIDifficulty.HARD
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
@@ -347,6 +364,7 @@ def test_enemy_stops_playing_once_energy_runs_out():
     battle = make_battle()
     battle.ai_difficulty = AIDifficulty.HARD
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [
         {"id": "enemy-fireball", "key": "fireball"},
         {"id": "enemy-slash", "key": "slash"},
@@ -362,6 +380,7 @@ def test_enemy_stops_playing_the_moment_the_player_dies():
     battle.hand = []
     battle.player.hp = 6
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
@@ -380,6 +399,7 @@ def test_enemy_energy_starts_fresh_every_enemy_turn():
     battle.ai_difficulty = AIDifficulty.HARD
     battle.enemy.energy = 0
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     battle.resolve_enemy_turn()
     assert battle.player.hp == 32 - 6
@@ -401,6 +421,7 @@ def test_passing_a_response_resumes_the_remaining_enemy_actions():
     battle.player.energy = 3
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
@@ -423,6 +444,7 @@ def test_dodging_one_attack_lets_the_next_one_land():
     battle.player.energy = 3
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
@@ -439,6 +461,7 @@ def test_end_turn_runs_enemy_actions_until_pass():
     battle = make_battle()
     initial_hp = battle.player.hp
     assert battle.end_player_turn().ok is True
+    withhold_enemy_skill(battle)
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     result = battle.resolve_enemy_turn()
     assert result.ok is True
@@ -452,7 +475,75 @@ def test_end_turn_runs_enemy_actions_until_pass():
 def test_resolve_enemy_turn_with_no_affordable_card_still_returns_to_player():
     battle = make_battle()
     battle.end_player_turn()
+    withhold_enemy_skill(battle)
     battle.enemy_hand = []
     battle.resolve_enemy_turn()
     assert battle.phase.value == "PLAYER_TURN"
     assert battle.player.hp == 32  # undamaged
+
+
+# --- Task 3: 电脑的英雄技能与战略空过 ---
+
+
+def test_enemy_hero_skill_is_a_candidate_next_to_its_cards():
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    battle.enemy.energy = 3
+
+    kinds = {action.kind for action in get_available_enemy_actions(battle)}
+
+    assert kinds == {"card", "skill", "pass"}
+
+
+def test_enemy_skill_leaves_the_candidates_once_used_or_unaffordable():
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy_hand = []
+    assert any(action.kind == "skill" for action in get_available_enemy_actions(battle))
+
+    withhold_enemy_skill(battle)
+    assert all(action.kind != "skill" for action in get_available_enemy_actions(battle))
+
+    battle.participant(Side.ENEMY).skill_used_this_turn = False
+    battle.enemy.energy = 1
+    assert all(action.kind != "skill" for action in get_available_enemy_actions(battle))
+
+
+def test_skill_scores_exactly_like_an_equivalent_card():
+    # 法师技能是 10 点伤害 / 2 能量，与重击同值同费，两者评分必须相同。
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+    battle.enemy.energy = 3
+    battle.player.shield = 0
+
+    scores = {a.kind: a.score for a in rank_enemy_actions(battle, AIDifficulty.MEDIUM)}
+
+    assert scores["skill"] == scores["card"]
+
+
+def test_medium_and_hard_pass_to_keep_the_last_energy_for_a_dodge():
+    for difficulty in (AIDifficulty.MEDIUM, AIDifficulty.HARD):
+        battle = battle_that_could_waste_its_dodge_energy()
+        ranked = rank_enemy_actions(battle, difficulty)
+        assert ranked[0].kind == "pass", difficulty
+        assert select_enemy_action(battle, difficulty, random.Random(0)).kind == "pass"
+
+
+def test_easy_spends_the_last_energy_instead_of_holding_it():
+    battle = battle_that_could_waste_its_dodge_energy()
+
+    ranked = rank_enemy_actions(battle, AIDifficulty.EASY)
+
+    assert ranked[0].card_id == "enemy-slash"
+
+
+def battle_that_could_waste_its_dodge_energy():
+    """手里有闪避、能量只剩 1 点，唯一的普通牌打在厚护盾上几乎没收益。"""
+    battle = make_battle()
+    battle.hand = []
+    battle.enemy.energy = 1
+    battle.player.shield = 12
+    battle.enemy_hand = [
+        {"id": "enemy-dodge", "key": "dodge"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    return battle

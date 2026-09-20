@@ -1,6 +1,7 @@
 from game.models import CardDefinition, HeroDefinition
 
 STARTING_ENERGY = 3
+SKILL_COST = 2
 
 HEROES: dict[str, HeroDefinition] = {
     "warrior": HeroDefinition("warrior", "战士", 32, "守护", "shield", 8),
