@@ -647,8 +647,269 @@ def test_responding_for_the_wrong_side_is_rejected():
     assert battle.phase is BattlePhase.RESPONSE
 
 
+# --- Task 2: 装备结算 ---
+
+
+def wear_gear(battle, side, card_key):
+    """直接给某一方穿上装备：这些用例测的是结算规则，不是打牌流程。"""
+    participant = battle.participant(side)
+    if card_key == "longsword":
+        participant.weapon = CARDS[card_key]
+    else:
+        participant.armor = CARDS[card_key]
+    return battle
+
+
+def test_equipping_puts_the_card_into_the_slot_and_never_into_the_discard_pile():
+    battle = make_battle()
+    battle.hand = [{"id": "player-sword", "key": "longsword"}]
+
+    result = battle.play_card("player-sword")
+
+    assert result.ok is True
+    participant = battle.participant(Side.PLAYER)
+    assert participant.weapon.key == "longsword"
+    assert participant.discard_pile == []
+    assert participant.combatant.energy == 2
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert "长剑" in battle.log[-1]
+
+
+def test_the_armor_card_lands_in_the_armor_slot():
+    battle = make_battle()
+    battle.hand = [{"id": "player-armor", "key": "iron_armor"}]
+
+    assert battle.play_card("player-armor").ok is True
+
+    participant = battle.participant(Side.PLAYER)
+    assert participant.armor.key == "iron_armor"
+    assert participant.weapon is None
+    assert participant.discard_pile == []
+
+
+def test_equipping_costs_energy_like_any_other_card():
+    battle = make_battle()
+    battle.player.energy = 0
+    battle.hand = [{"id": "player-sword", "key": "longsword"}]
+
+    result = battle.play_card("player-sword")
+
+    assert result.ok is False
+    assert result.message == "能量不足，还差 1 点"
+    assert battle.participant(Side.PLAYER).weapon is None
+    assert battle.hand == [{"id": "player-sword", "key": "longsword"}]
+
+
+def test_equipping_during_the_other_sides_turn_is_rejected():
+    battle = make_battle()
+    battle.hand = [{"id": "player-sword", "key": "longsword"}]
+    battle.end_player_turn()
+
+    result = battle.play_card("player-sword")
+
+    assert result.ok is False
+    assert result.message == "现在是电脑回合，请等待电脑行动"
+    assert battle.participant(Side.PLAYER).weapon is None
+    assert battle.player.energy == 3
+
+
+def test_equipping_never_opens_a_response_window():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [{"id": "player-sword", "key": "longsword"}]
+
+    assert battle.play_card("player-sword").ok is True
+
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.pending_attack is None
+    assert battle.enemy_hand == [{"id": "enemy-dodge", "key": "dodge"}]
+
+
+def test_the_enemy_side_equips_through_the_same_path():
+    battle = make_battle()
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-sword", "key": "longsword"}]
+
+    result = battle.play_card_for(Side.ENEMY, "enemy-sword")
+
+    assert result.ok is True
+    enemy = battle.participant(Side.ENEMY)
+    assert enemy.weapon.key == "longsword"
+    assert enemy.discard_pile == []
+    assert enemy.combatant.energy == 2
+
+
+def test_the_weapon_boosts_only_the_first_slash_of_its_owners_turn():
+    battle = wear_gear(make_battle(), Side.PLAYER, "longsword")
+    battle.enemy_hand = []
+    battle.hand = [{"id": "slash-1", "key": "slash"}, {"id": "slash-2", "key": "slash"}]
+    before = battle.enemy.hp
+
+    assert battle.play_card("slash-1").ok is True
+    assert battle.enemy.hp == before - 8
+    assert battle.play_card("slash-2").ok is True
+    assert battle.enemy.hp == before - 14
+
+
+def test_the_weapon_never_boosts_anything_but_a_slash():
+    battle = wear_gear(make_battle(), Side.PLAYER, "longsword")
+    battle.enemy_hand = []
+    battle.hand = [{"id": "player-heavy", "key": "heavy_strike"}]
+    before = battle.enemy.hp
+
+    assert battle.play_card("player-heavy").ok is True
+
+    assert battle.enemy.hp == before - 10
+    assert battle.participant(Side.PLAYER).weapon_used_this_turn is False
+
+
+def test_the_weapon_bonus_comes_back_when_its_owner_starts_a_new_turn():
+    battle = wear_gear(make_battle(), Side.PLAYER, "longsword")
+    battle.enemy_hand = []
+    battle.hand = [{"id": "player-slash", "key": "slash"}]
+    battle.play_card("player-slash")
+    assert battle.participant(Side.PLAYER).weapon_used_this_turn is True
+
+    battle.start_turn(Side.PLAYER)
+
+    assert battle.participant(Side.PLAYER).weapon_used_this_turn is False
+
+
+def test_dodging_still_spends_the_weapon_bonus():
+    battle = wear_gear(make_battle(), Side.PLAYER, "longsword")
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [{"id": "player-slash", "key": "slash"}]
+    before = battle.enemy.hp
+
+    assert battle.play_card("player-slash").ok is True
+
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.enemy.hp == before
+    assert battle.participant(Side.PLAYER).weapon_used_this_turn is True
+
+
+def test_a_boosted_attack_shows_and_deals_the_boosted_damage():
+    battle = wear_gear(make_battle(), Side.ENEMY, "longsword")
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.end_player_turn()
+    withhold_enemy_skill(battle)
+    freeze_enemy_piles(battle)
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    before = battle.player.hp
+
+    assert battle.play_card_for(Side.ENEMY, "enemy-slash").ok is True
+    assert battle.phase is BattlePhase.RESPONSE
+    # 响应窗口里看到的数字，必须是响应之后真正挨到的数字。
+    assert battle.pending_attack.damage == 8
+
+    battle.respond("pass")
+
+    assert battle.player.hp == before - 8
+    assert any("对你造成 8 点伤害" in entry for entry in battle.log)
+
+
+def test_the_armor_soaks_the_first_hit_its_owner_takes():
+    battle = wear_gear(make_battle(), Side.PLAYER, "iron_armor")
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+
+    battle.play_card_for(Side.ENEMY, "enemy-slash")
+
+    assert battle.player.hp == 32 - 4
+    assert battle.participant(Side.PLAYER).armor_used_this_turn is True
+
+
+def test_the_armor_soaks_only_the_first_hit_of_its_owners_turn():
+    battle = wear_gear(make_battle(), Side.PLAYER, "iron_armor")
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = [
+        {"id": "enemy-slash", "key": "slash"},
+        {"id": "enemy-slash-2", "key": "slash"},
+    ]
+
+    battle.play_card_for(Side.ENEMY, "enemy-slash")
+    battle.play_card_for(Side.ENEMY, "enemy-slash-2")
+
+    assert battle.player.hp == 32 - 4 - 6
+
+
+def test_the_armor_comes_back_when_its_owner_starts_a_new_turn():
+    battle = wear_gear(make_battle(), Side.PLAYER, "iron_armor")
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    battle.play_card_for(Side.ENEMY, "enemy-slash")
+    assert battle.participant(Side.PLAYER).armor_used_this_turn is True
+
+    battle.start_turn(Side.PLAYER)
+
+    assert battle.participant(Side.PLAYER).armor_used_this_turn is False
+
+
+def test_the_armor_also_soaks_hero_skill_damage():
+    battle = pin_enemy_hero(make_battle("warrior"), "mage")
+    wear_gear(battle, Side.PLAYER, "iron_armor")
+    battle.hand = []
+    freeze_enemy_piles(battle)
+    battle.end_player_turn()
+
+    assert battle.use_skill_for(Side.ENEMY).ok is True
+
+    assert battle.player.hp == 32 - 8
+    assert battle.participant(Side.PLAYER).armor_used_this_turn is True
+
+
+def test_the_armor_reduces_damage_before_the_shield_absorbs_it():
+    battle = wear_gear(make_battle(), Side.PLAYER, "iron_armor")
+    battle.player.shield = 5
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+
+    battle.play_card_for(Side.ENEMY, "enemy-slash")
+
+    # 先减 2 再进护盾：5 点护盾只吸收 4 点，剩下的 1 点还留在身上。
+    assert battle.player.shield == 1
+    assert battle.player.hp == 32
+
+
+def test_the_armor_is_spent_even_when_the_hit_takes_no_health():
+    battle = wear_gear(make_battle(), Side.PLAYER, "iron_armor")
+    battle.player.shield = 10
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+
+    battle.play_card_for(Side.ENEMY, "enemy-slash")
+
+    assert battle.player.hp == 32
+    assert battle.player.shield == 6
+    assert battle.participant(Side.PLAYER).armor_used_this_turn is True
+
+
+def test_dodging_an_attack_does_not_spend_the_armor():
+    battle = wear_gear(make_battle(), Side.PLAYER, "iron_armor")
+    battle.hand = [{"id": "player-dodge", "key": "dodge"}]
+    battle.end_player_turn()
+    withhold_enemy_skill(battle)
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    battle.play_card_for(Side.ENEMY, "enemy-slash")
+    assert battle.phase is BattlePhase.RESPONSE
+
+    assert battle.respond("dodge").ok is True
+
+    assert battle.player.hp == 32
+    assert battle.participant(Side.PLAYER).armor_used_this_turn is False
+
+
 def assert_consistent(battle):
-    """响应窗口只在有待响应攻击时存在；能量不为负；双方牌数守恒。"""
+    """响应窗口只在有待响应攻击时存在；能量不为负；双方四个牌区守恒。"""
     pending = battle.pending_attack
     in_response = battle.phase is BattlePhase.RESPONSE
     assert in_response == (pending is not None), battle.phase
@@ -657,12 +918,18 @@ def assert_consistent(battle):
     for side in (Side.PLAYER, Side.ENEMY):
         participant = battle.participant(side)
         assert participant.combatant.energy >= 0, (side, participant.combatant)
+        equipped = [
+            slot.key
+            for slot in (participant.weapon, participant.armor)
+            if slot is not None
+        ]
         keys = (
             Counter(card["key"] for card in participant.hand)
             + Counter(participant.draw_pile)
             + Counter(participant.discard_pile)
+            + Counter(equipped)
         )
-        # 攻击挂起时那张牌已经在弃牌区，所以任何时刻都应当正好是整副牌。
+        # 攻击挂起时那张牌已经在弃牌区，装备则在槽里，任何时刻都应当正好是整副牌。
         assert keys == Counter(FIXED_DECK_KEYS), (side, keys)
 
 

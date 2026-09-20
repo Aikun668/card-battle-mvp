@@ -24,6 +24,15 @@ CARDS: dict[str, CardDefinition] = {
 # 公开牌表的键：AI 的最坏情况估算只能从这里取牌，不能读对手手里有什么。
 CATALOG_KEYS: tuple[str, ...] = tuple(CARDS)
 
+# 装备 key → ParticipantState 上的槽位字段名。每张装备牌都必须在这里有归宿。
+EQUIP_SLOTS: dict[str, str] = {
+    "longsword": "weapon",
+    "iron_armor": "armor",
+}
+
+# 长剑只强化斩击：别的伤害牌不受武器加成。
+LONGSWORD_BOOST_KEYS: frozenset[str] = frozenset({"slash"})
+
 FIXED_DECK_KEYS: list[str] = [
     "slash",
     "slash",

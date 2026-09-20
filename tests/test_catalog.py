@@ -1,4 +1,4 @@
-from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
+from game.catalog import CARDS, EQUIP_SLOTS, FIXED_DECK_KEYS, HEROES
 
 
 def test_catalog_has_the_three_specified_heroes():
@@ -30,6 +30,12 @@ def test_equipment_cards_cost_one_energy_and_carry_their_bonus_value():
     assert CARDS["iron_armor"].cost == 1
     assert CARDS["iron_armor"].effect_type == "equip"
     assert CARDS["iron_armor"].value == 2
+
+
+def test_every_equipment_card_has_a_slot_to_land_in():
+    equips = {key for key, card in CARDS.items() if card.effect_type == "equip"}
+    assert set(EQUIP_SLOTS) == equips
+    assert set(EQUIP_SLOTS.values()) == {"weapon", "armor"}
 
 
 def test_each_card_matches_mvp_cost_and_effect_values():

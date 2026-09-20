@@ -10,8 +10,10 @@ from game.ai import (
 from game.catalog import (
     CARDS,
     CATALOG_KEYS,
+    EQUIP_SLOTS,
     FIXED_DECK_KEYS,
     HEROES,
+    LONGSWORD_BOOST_KEYS,
     SKILL_COST,
     STARTING_ENERGY,
 )
@@ -242,6 +244,11 @@ class BattleState:
             return ActionResult(False, f"能量不足，还差 {shortage} 点")
         participant.combatant.energy -= definition.cost
         participant.hand.pop(index)
+        if definition.effect_type == "equip":
+            # 装备是第四个牌区：留在槽里跨回合生效，不进弃牌堆。
+            self._equip(participant, definition)
+            self.log.append(self._format_card_log(side, definition))
+            return ActionResult(True, "")
         participant.discard_pile.append(definition.key)
         if definition.effect_type == "damage":
             # 费用与弃牌在挂起前就结清，响应窗口里只决定这次伤害落不落地。
@@ -254,6 +261,9 @@ class BattleState:
         self.log.append(self._format_card_log(side, definition))
         self._check_terminal()
         return ActionResult(True, "")
+
+    def _equip(self, participant: ParticipantState, definition: CardDefinition) -> None:
+        setattr(participant, EQUIP_SLOTS[definition.key], definition)
 
     def play_card(self, card_instance_id: str) -> ActionResult:
         return self.play_card_for(Side.PLAYER, card_instance_id)
@@ -271,14 +281,15 @@ class BattleState:
         elif definition.effect_type == "heal":
             self.apply_heal(source, definition.value)
 
-    def _format_card_log(self, side: Side, definition: CardDefinition) -> str:
+    def _format_card_log(
+        self, side: Side, definition: CardDefinition, dealt: int | None = None
+    ) -> str:
+        """`dealt` 只有伤害牌会用：长剑加成和铁甲减伤都改变真正落下的数字。"""
         actor = ACTOR_LABEL[side]
         if definition.effect_type == "damage":
             target = HIT_LABEL[side]
-            return (
-                f"{actor}使用【{definition.name}】，"
-                f"对{target}造成 {definition.value} 点伤害"
-            )
+            amount = definition.value if dealt is None else dealt
+            return f"{actor}使用【{definition.name}】，对{target}造成 {amount} 点伤害"
         if definition.effect_type == "shield":
             return f"{actor}使用【{definition.name}】，获得 {definition.value} 点护盾"
         if definition.effect_type == "heal":
@@ -307,18 +318,18 @@ class BattleState:
                 f"获得 {skill.skill_value} 点护盾"
             )
         elif skill.skill_type == "damage":
-            self.apply_damage(self.opponent_of(side).combatant, skill.skill_value)
+            dealt = self._deal_damage(OPPONENT_SIDE[side], skill.skill_value)
             self.log.append(
                 f"{actor}释放技能【{skill.skill_name}】，"
-                f"对{HIT_LABEL[side]}造成 {skill.skill_value} 点伤害"
+                f"对{HIT_LABEL[side]}造成 {dealt} 点伤害"
             )
         elif skill.skill_type == "damage_draw":
-            self.apply_damage(self.opponent_of(side).combatant, skill.skill_value)
+            dealt = self._deal_damage(OPPONENT_SIDE[side], skill.skill_value)
             drawn = self.draw_cards_for(side, 1)
             extra = "并抽取 1 张牌" if drawn else "但手牌已满，未抽到牌"
             self.log.append(
                 f"{actor}释放技能【{skill.skill_name}】，"
-                f"对{HIT_LABEL[side]}造成 {skill.skill_value} 点伤害，{extra}"
+                f"对{HIT_LABEL[side]}造成 {dealt} 点伤害，{extra}"
             )
         self._check_terminal()
         return ActionResult(True, "")
@@ -336,9 +347,11 @@ class BattleState:
         return SIDE_PHASE.get(self.phase)
 
     def start_turn(self, side: Side, *, initial: bool = False) -> None:
-        """回合开始：回满能量、重置技能次数；只有本局首回合不额外补牌。"""
+        """回合开始：回满能量、重置技能与装备的本回合次数；首回合不额外补牌。"""
         participant = self.participant(side)
         participant.skill_used_this_turn = False
+        participant.weapon_used_this_turn = False
+        participant.armor_used_this_turn = False
         participant.combatant.energy = STARTING_ENERGY
         if not initial:
             self.draw_cards_for(side, 1)
@@ -477,20 +490,49 @@ class BattleState:
         self.log.append(f"{SIDE_LABEL[side]}使用【{dodge.name}】，抵消了本次伤害")
         return self._finish_response()
 
+    def _attack_damage(self, attacker: Side, definition: CardDefinition) -> int:
+        """长剑只强化斩击，每次自己回合加一次；打出的瞬间就算进这一击。"""
+        participant = self.participant(attacker)
+        weapon = participant.weapon
+        boosted = (
+            weapon is not None
+            and not participant.weapon_used_this_turn
+            and definition.key in LONGSWORD_BOOST_KEYS
+        )
+        if not boosted:
+            return definition.value
+        participant.weapon_used_this_turn = True
+        return definition.value + weapon.value
+
+    def _deal_damage(self, defender: Side, damage: int) -> int:
+        """对角色造成伤害的唯一漏斗：铁甲先减伤，再交给护盾与血量。
+
+        返回铁甲减伤之后、护盾吸收之前的数值，日志按它报伤害。
+        """
+        participant = self.participant(defender)
+        armor = participant.armor
+        if armor is not None and not participant.armor_used_this_turn:
+            # 打出即消耗：这一下被护盾全吃掉也算用掉了本回合的铁甲。
+            participant.armor_used_this_turn = True
+            damage = max(0, damage - armor.value)
+        self.apply_damage(participant.combatant, damage)
+        return damage
+
     def _open_response(
         self, attacker: Side, definition: CardDefinition
     ) -> ActionResult:
         """伤害牌先挂起：能闪避的一方获得一次响应机会，否则当场按护盾优先结算。"""
         defender = OPPONENT_SIDE[attacker]
+        damage = self._attack_damage(attacker, definition)
         if not self._has_available_dodge(defender):
-            self._resolve_damage(attacker, definition)
+            self._resolve_damage(attacker, definition, damage)
             return ActionResult(True, "")
         self.pending_attack = PendingAttack(
             attacker=attacker,
             defender=defender,
             card_key=definition.key,
             card_name=definition.name,
-            damage=definition.value,
+            damage=damage,
         )
         self.phase = BattlePhase.RESPONSE
         if defender is Side.ENEMY:
@@ -498,16 +540,17 @@ class BattleState:
             self._resolve_enemy_response()
         return ActionResult(True, "")
 
-    def _resolve_damage(self, attacker: Side, definition: CardDefinition) -> None:
-        self.apply_damage(
-            self.participant(OPPONENT_SIDE[attacker]).combatant, definition.value
-        )
-        self.log.append(self._format_card_log(attacker, definition))
+    def _resolve_damage(
+        self, attacker: Side, definition: CardDefinition, damage: int
+    ) -> None:
+        dealt = self._deal_damage(OPPONENT_SIDE[attacker], damage)
+        self.log.append(self._format_card_log(attacker, definition, dealt))
         self._check_terminal()
 
     def _take_pending_attack(self) -> ActionResult:
         pending = self.pending_attack
-        self._resolve_damage(pending.attacker, CARDS[pending.card_key])
+        # 用挂起时的伤害值，不能回查牌表：长剑加成只存在于这一份记录里。
+        self._resolve_damage(pending.attacker, CARDS[pending.card_key], pending.damage)
         return self._finish_response()
 
     def _finish_response(self) -> ActionResult:
