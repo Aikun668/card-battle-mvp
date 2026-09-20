@@ -1,9 +1,15 @@
 import random
 import uuid
 
-from game.ai import choose_enemy_response, select_enemy_action
+from game.ai import (
+    AIObservation,
+    PublicParticipantState,
+    choose_enemy_response,
+    select_enemy_action,
+)
 from game.catalog import (
     CARDS,
+    CATALOG_KEYS,
     FIXED_DECK_KEYS,
     HEROES,
     SKILL_COST,
@@ -380,7 +386,9 @@ class BattleState:
             if self.is_finished() or self.phase is BattlePhase.RESPONSE:
                 # 攻击挂起等玩家响应时先收工，剩下的行动由 _finish_response() 续跑。
                 return ActionResult(True, "")
-            action = select_enemy_action(self, self.ai_difficulty, self.rng)
+            action = select_enemy_action(
+                self.enemy_observation(), self.ai_difficulty, self.rng
+            )
             if action.kind == "pass":
                 break
             if action.kind == "skill":
@@ -397,6 +405,21 @@ class BattleState:
             return ActionResult(True, "")
         self.log.append(f"第 {self.round_number} 回合结束，玩家开始行动")
         return self.advance_turn()
+
+    def enemy_observation(self) -> AIObservation:
+        """电脑一次决策能看到的全部信息，形如一道信息边界。
+
+        对手的手牌与抽牌堆不进来：困难模式的一步前瞻只能靠公开牌表、公开弃牌
+        记录和对手的公开能量估算威胁，看不到他手里握着哪一张。
+        """
+        return AIObservation(
+            self_state=_public_participant(self.participant(Side.ENEMY)),
+            opponent_state=_public_participant(self.participant(Side.PLAYER)),
+            own_hand=tuple(dict(card) for card in self.enemy_hand),
+            public_discard_keys=tuple(self.discard_pile),
+            catalog_keys=CATALOG_KEYS,
+            pending_attack=self.pending_attack,
+        )
 
     def _find_dodge_index(self, side: Side) -> int:
         for index, card in enumerate(self.participant(side).hand):
@@ -498,7 +521,9 @@ class BattleState:
         return ActionResult(True, "")
 
     def _resolve_enemy_response(self) -> None:
-        action = choose_enemy_response(self, self.ai_difficulty, self.rng)
+        action = choose_enemy_response(
+            self.enemy_observation(), self.ai_difficulty, self.rng
+        )
         self.respond_for(Side.ENEMY, action.kind)
 
     def is_finished(self) -> bool:
@@ -539,6 +564,18 @@ class BattleState:
             ),
             starting_side=Side(payload.get("starting_side", Side.PLAYER.value)),
         )
+
+
+def _public_participant(participant: ParticipantState) -> PublicParticipantState:
+    combatant = participant.combatant
+    return PublicParticipantState(
+        hero_key=participant.hero.key,
+        max_hp=combatant.max_hp,
+        hp=combatant.hp,
+        shield=combatant.shield,
+        energy=combatant.energy,
+        skill_used_this_turn=participant.skill_used_this_turn,
+    )
 
 
 def _combatant_to_payload(combatant: Combatant) -> dict:

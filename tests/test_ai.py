@@ -1,7 +1,11 @@
 import random
+from dataclasses import fields
 
 from game.ai import (
+    AIObservation,
+    PublicParticipantState,
     choose_enemy_response,
+    estimate_player_threat,
     get_available_enemy_actions,
     rank_enemy_actions,
     rank_enemy_responses,
@@ -9,7 +13,7 @@ from game.ai import (
     select_enemy_action,
 )
 from game.battle import BattleState
-from game.catalog import FIXED_DECK_KEYS, HEROES
+from game.catalog import CARDS, CATALOG_KEYS, FIXED_DECK_KEYS, HEROES
 from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
@@ -55,16 +59,20 @@ def log_index(battle, text):
 
 def test_hard_always_selects_the_top_scored_action():
     battle = battle_with_three_ranked_choices()
-    top = rank_enemy_actions(battle, AIDifficulty.HARD)[0]
+    top = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)[0]
     for seed in range(5):
-        selected = select_enemy_action(battle, AIDifficulty.HARD, random.Random(seed))
+        selected = select_enemy_action(
+            battle.enemy_observation(), AIDifficulty.HARD, random.Random(seed)
+        )
         assert selected.card_id == top.card_id
 
 
 def _pick_rates(difficulty, runs=400):
     picks = [
         select_enemy_action(
-            battle_with_three_ranked_choices(), difficulty, random.Random(seed)
+            battle_with_three_ranked_choices().enemy_observation(),
+            difficulty,
+            random.Random(seed),
         ).card_id
         for seed in range(runs)
     ]
@@ -74,7 +82,9 @@ def _pick_rates(difficulty, runs=400):
 def test_medium_mostly_selects_the_top_action_but_sometimes_the_second():
     battle = battle_with_three_ranked_choices()
     picks = [
-        select_enemy_action(battle, AIDifficulty.MEDIUM, random.Random(seed)).card_id
+        select_enemy_action(
+            battle.enemy_observation(), AIDifficulty.MEDIUM, random.Random(seed)
+        ).card_id
         for seed in range(400)
     ]
     assert set(picks) == {"best", "second"}
@@ -91,7 +101,9 @@ def test_easy_selects_worse_than_medium_and_hard():
 def test_easy_can_select_a_non_top_action():
     battle = battle_with_three_ranked_choices()
     seen = {
-        select_enemy_action(battle, AIDifficulty.EASY, random.Random(seed)).card_id
+        select_enemy_action(
+            battle.enemy_observation(), AIDifficulty.EASY, random.Random(seed)
+        ).card_id
         for seed in range(30)
     }
     assert seen - {"best"}, "简单难度必须真的会选中非最优选项"
@@ -99,8 +111,12 @@ def test_easy_can_select_a_non_top_action():
 
 def test_selection_is_reproducible_for_the_same_seed():
     battle = battle_with_three_ranked_choices()
-    first = select_enemy_action(battle, AIDifficulty.EASY, random.Random(11))
-    second = select_enemy_action(battle, AIDifficulty.EASY, random.Random(11))
+    first = select_enemy_action(
+        battle.enemy_observation(), AIDifficulty.EASY, random.Random(11)
+    )
+    second = select_enemy_action(
+        battle.enemy_observation(), AIDifficulty.EASY, random.Random(11)
+    )
     assert first == second
 
 
@@ -108,7 +124,9 @@ def test_every_difficulty_selects_the_only_candidate():
     battle = make_battle()
     battle.enemy_hand = []
     for difficulty in AIDifficulty:
-        selected = select_enemy_action(battle, difficulty, random.Random(2))
+        selected = select_enemy_action(
+            battle.enemy_observation(), difficulty, random.Random(2)
+        )
         assert selected.kind == "pass"
 
 
@@ -117,7 +135,9 @@ def test_easy_never_picks_an_action_with_no_upside():
     battle.enemy.hp = battle.enemy.max_hp
     battle.enemy_hand = [{"id": "useless-heal", "key": "heal"}]
     for seed in range(30):
-        selected = select_enemy_action(battle, AIDifficulty.EASY, random.Random(seed))
+        selected = select_enemy_action(
+            battle.enemy_observation(), AIDifficulty.EASY, random.Random(seed)
+        )
         assert selected.kind == "pass"
 
 
@@ -134,8 +154,8 @@ def test_hard_lookahead_flips_to_defence_when_the_player_can_kill_next_turn():
         {"id": "fireball", "key": "fireball"},
         {"id": "shield", "key": "shield"},
     ]
-    medium_top = rank_enemy_actions(battle, AIDifficulty.MEDIUM)[0]
-    hard_top = rank_enemy_actions(battle, AIDifficulty.HARD)[0]
+    medium_top = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)[0]
+    hard_top = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)[0]
     assert medium_top.card_id == "fireball"
     assert hard_top.card_id == "shield"
 
@@ -152,7 +172,7 @@ def test_lethal_heavy_strike_outranks_overkill_fireball():
         {"id": "heavy", "key": "heavy_strike"},
         {"id": "fireball", "key": "fireball"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
     assert ranked[0].card_id == "heavy"
 
 
@@ -163,7 +183,7 @@ def test_heal_near_max_health_scores_below_damage():
         {"id": "heal", "key": "heal"},
         {"id": "slash", "key": "slash"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "slash"
 
 
@@ -175,7 +195,7 @@ def test_existing_shield_makes_further_shield_score_below_attack():
         {"id": "shield", "key": "shield"},
         {"id": "slash", "key": "slash"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "slash"
 
 
@@ -187,7 +207,7 @@ def test_actual_healing_outranks_plain_attack_when_hurt_and_no_kill_exists():
         {"id": "heal", "key": "heal"},
         {"id": "slash", "key": "slash"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "heal"
 
 
@@ -201,7 +221,7 @@ def test_attack_that_punches_through_shield_beats_a_fully_absorbed_one():
         {"id": "slash", "key": "slash"},
         {"id": "heavy", "key": "heavy_strike"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "heavy"
 
 
@@ -215,7 +235,7 @@ def test_enemy_keeps_attacking_a_heavily_shielded_player_instead_of_stalling():
         {"id": "enemy-fireball", "key": "fireball"},
         {"id": "enemy-shield", "key": "shield"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "enemy-fireball"
 
 
@@ -227,14 +247,14 @@ def test_a_dying_enemy_defends_instead_of_trading_damage():
         {"id": "fireball", "key": "fireball"},
         {"id": "heal", "key": "heal"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].card_id == "heal"
 
 
 def test_pass_ranks_last_when_a_useful_action_exists():
     battle = make_battle()
     battle.enemy_hand = [{"id": "slash", "key": "slash"}]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[-1].kind == "pass"
 
 
@@ -242,14 +262,14 @@ def test_pass_outranks_a_heal_that_would_restore_nothing():
     battle = make_battle()
     battle.enemy.hp = battle.enemy.max_hp
     battle.enemy_hand = [{"id": "heal", "key": "heal"}]
-    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert ranked[0].kind == "pass"
 
 
 def test_selection_does_not_mutate_the_battle():
     battle = battle_with_three_ranked_choices()
     before = battle.to_dict()
-    select_enemy_action(battle, AIDifficulty.EASY, random.Random(1))
+    select_enemy_action(battle.enemy_observation(), AIDifficulty.EASY, random.Random(1))
     assert battle.to_dict() == before
 
 
@@ -257,14 +277,14 @@ def test_ranking_does_not_mutate_the_battle():
     battle = make_battle()
     battle.enemy_hand = [{"id": "slash", "key": "slash"}]
     before = battle.to_dict()
-    rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
     assert battle.to_dict() == before
 
 
 def test_available_enemy_actions_include_affordable_cards_and_pass():
     battle = make_battle()
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
-    actions = get_available_enemy_actions(battle)
+    actions = get_available_enemy_actions(battle.enemy_observation())
     assert {action.kind for action in actions} == {"card", "pass"}
     assert any(action.card_id == "enemy-slash" for action in actions)
 
@@ -273,21 +293,21 @@ def test_unaffordable_cards_are_not_candidates():
     battle = make_battle()
     battle.enemy.energy = 1
     battle.enemy_hand = [{"id": "enemy-fireball", "key": "fireball"}]
-    actions = get_available_enemy_actions(battle)
+    actions = get_available_enemy_actions(battle.enemy_observation())
     assert all(action.kind != "card" for action in actions)
 
 
 def test_dodge_is_never_an_enemy_candidate():
     battle = make_battle()
     battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
-    actions = get_available_enemy_actions(battle)
+    actions = get_available_enemy_actions(battle.enemy_observation())
     assert all(action.kind != "card" for action in actions)
 
 
 def test_pass_is_available_even_with_an_empty_hand():
     battle = make_battle()
     battle.enemy_hand = []
-    actions = get_available_enemy_actions(battle)
+    actions = get_available_enemy_actions(battle.enemy_observation())
     assert [action.kind for action in actions] == ["pass"]
 
 
@@ -295,7 +315,7 @@ def test_candidate_generation_does_not_mutate_the_battle():
     battle = make_battle()
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     before = battle.to_dict()
-    get_available_enemy_actions(battle)
+    get_available_enemy_actions(battle.enemy_observation())
     assert battle.to_dict() == before
 
 
@@ -306,7 +326,7 @@ def test_enemy_heals_when_badly_hurt():
         {"id": "enemy-heal", "key": "heal"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
     assert ranked[0].card_id == "enemy-heal"
 
 
@@ -317,7 +337,7 @@ def test_enemy_goes_for_lethal_damage_when_the_player_is_low():
         {"id": "enemy-slash", "key": "slash"},
         {"id": "enemy-fireball", "key": "fireball"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
     assert ranked[0].card_id == "enemy-fireball"
 
 
@@ -329,7 +349,7 @@ def test_enemy_shields_when_hurt_and_no_heal_is_available():
         {"id": "enemy-shield", "key": "shield"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
     assert ranked[0].card_id == "enemy-shield"
 
 
@@ -341,7 +361,12 @@ def test_enemy_passes_when_it_cannot_afford_any_card():
         {"id": "enemy-fireball", "key": "fireball"},
     ]
     for difficulty in AIDifficulty:
-        assert select_enemy_action(battle, difficulty, random.Random(5)).kind == "pass"
+        assert (
+            select_enemy_action(
+                battle.enemy_observation(), difficulty, random.Random(5)
+            ).kind
+            == "pass"
+        )
 
 
 # --- Task 4: enemy turn loop ---
@@ -493,7 +518,10 @@ def test_enemy_hero_skill_is_a_candidate_next_to_its_cards():
     battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     battle.enemy.energy = 3
 
-    kinds = {action.kind for action in get_available_enemy_actions(battle)}
+    kinds = {
+        action.kind
+        for action in get_available_enemy_actions(battle.enemy_observation())
+    }
 
     assert kinds == {"card", "skill", "pass"}
 
@@ -501,14 +529,23 @@ def test_enemy_hero_skill_is_a_candidate_next_to_its_cards():
 def test_enemy_skill_leaves_the_candidates_once_used_or_unaffordable():
     battle = battle_with_enemy_hero("mage")
     battle.enemy_hand = []
-    assert any(action.kind == "skill" for action in get_available_enemy_actions(battle))
+    assert any(
+        action.kind == "skill"
+        for action in get_available_enemy_actions(battle.enemy_observation())
+    )
 
     withhold_enemy_skill(battle)
-    assert all(action.kind != "skill" for action in get_available_enemy_actions(battle))
+    assert all(
+        action.kind != "skill"
+        for action in get_available_enemy_actions(battle.enemy_observation())
+    )
 
     battle.participant(Side.ENEMY).skill_used_this_turn = False
     battle.enemy.energy = 1
-    assert all(action.kind != "skill" for action in get_available_enemy_actions(battle))
+    assert all(
+        action.kind != "skill"
+        for action in get_available_enemy_actions(battle.enemy_observation())
+    )
 
 
 def test_skill_scores_exactly_like_an_equivalent_card():
@@ -518,7 +555,10 @@ def test_skill_scores_exactly_like_an_equivalent_card():
     battle.enemy.energy = 3
     battle.player.shield = 0
 
-    scores = {a.kind: a.score for a in rank_enemy_actions(battle, AIDifficulty.MEDIUM)}
+    scores = {
+        a.kind: a.score
+        for a in rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
+    }
 
     assert scores["skill"] == scores["card"]
 
@@ -526,15 +566,20 @@ def test_skill_scores_exactly_like_an_equivalent_card():
 def test_medium_and_hard_pass_to_keep_the_last_energy_for_a_dodge():
     for difficulty in (AIDifficulty.MEDIUM, AIDifficulty.HARD):
         battle = battle_that_could_waste_its_dodge_energy()
-        ranked = rank_enemy_actions(battle, difficulty)
+        ranked = rank_enemy_actions(battle.enemy_observation(), difficulty)
         assert ranked[0].kind == "pass", difficulty
-        assert select_enemy_action(battle, difficulty, random.Random(0)).kind == "pass"
+        assert (
+            select_enemy_action(
+                battle.enemy_observation(), difficulty, random.Random(0)
+            ).kind
+            == "pass"
+        )
 
 
 def test_easy_spends_the_last_energy_instead_of_holding_it():
     battle = battle_that_could_waste_its_dodge_energy()
 
-    ranked = rank_enemy_actions(battle, AIDifficulty.EASY)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.EASY)
 
     assert ranked[0].card_id == "enemy-slash"
 
@@ -575,15 +620,18 @@ def test_dodge_scores_only_the_damage_that_would_reach_health():
     battle.enemy.shield = 4
 
     # 护盾先吸掉 4 点，闪避真正救下的只有 6 点生命。
-    assert score_dodge(battle) == 6.0
+    assert score_dodge(battle.enemy_observation()) == 6.0
 
 
 def test_dodge_scores_nothing_when_the_shield_absorbs_the_whole_hit():
     battle = battle_with_a_pending_attack(10)
     battle.enemy.shield = 12
 
-    assert score_dodge(battle) == 0.0
-    assert rank_enemy_responses(battle, AIDifficulty.HARD)[0].kind == "pass"
+    assert score_dodge(battle.enemy_observation()) == 0.0
+    assert (
+        rank_enemy_responses(battle.enemy_observation(), AIDifficulty.HARD)[0].kind
+        == "pass"
+    )
 
 
 def test_no_difficulty_spends_a_dodge_that_saves_no_health():
@@ -593,7 +641,9 @@ def test_no_difficulty_spends_a_dodge_that_saves_no_health():
 
     for difficulty in AIDifficulty:
         kinds = {
-            choose_enemy_response(battle, difficulty, random.Random(seed)).kind
+            choose_enemy_response(
+                battle.enemy_observation(), difficulty, random.Random(seed)
+            ).kind
             for seed in range(30)
         }
         assert kinds == {"pass"}, difficulty
@@ -604,7 +654,9 @@ def test_hard_gives_up_a_small_hit_to_keep_its_last_energy_for_a_bigger_one():
     battle = battle_with_a_pending_attack(2)
 
     kinds = {
-        choose_enemy_response(battle, AIDifficulty.HARD, random.Random(seed)).kind
+        choose_enemy_response(
+            battle.enemy_observation(), AIDifficulty.HARD, random.Random(seed)
+        ).kind
         for seed in range(30)
     }
 
@@ -615,7 +667,9 @@ def test_hard_never_declines_a_dodge_that_saves_real_health():
     battle = battle_with_a_pending_attack(10)
 
     kinds = {
-        choose_enemy_response(battle, AIDifficulty.HARD, random.Random(seed)).kind
+        choose_enemy_response(
+            battle.enemy_observation(), AIDifficulty.HARD, random.Random(seed)
+        ).kind
         for seed in range(20)
     }
 
@@ -627,10 +681,12 @@ def test_easy_occasionally_declines_a_dodge_the_higher_levels_take():
     rng = random.Random(3)
 
     easy = [
-        choose_enemy_response(battle, AIDifficulty.EASY, rng).kind for _ in range(200)
+        choose_enemy_response(battle.enemy_observation(), AIDifficulty.EASY, rng).kind
+        for _ in range(200)
     ]
     medium = [
-        choose_enemy_response(battle, AIDifficulty.MEDIUM, rng).kind for _ in range(200)
+        choose_enemy_response(battle.enemy_observation(), AIDifficulty.MEDIUM, rng).kind
+        for _ in range(200)
     ]
 
     # 简单难度允许看走眼，但不能变成每次都放弃；难度越高越倾向于闪避。
@@ -642,7 +698,10 @@ def test_response_candidates_are_only_dodge_and_pass():
     battle = battle_with_a_pending_attack(10)
 
     kinds = [
-        candidate.kind for candidate in rank_enemy_responses(battle, AIDifficulty.EASY)
+        candidate.kind
+        for candidate in rank_enemy_responses(
+            battle.enemy_observation(), AIDifficulty.EASY
+        )
     ]
 
     assert sorted(kinds) == ["dodge", "pass"]
@@ -652,6 +711,133 @@ def test_responding_does_not_peek_at_or_change_the_enemy_hand():
     battle = battle_with_a_pending_attack(10)
     before = battle.to_dict()
 
-    choose_enemy_response(battle, AIDifficulty.HARD, random.Random(0))
+    choose_enemy_response(
+        battle.enemy_observation(), AIDifficulty.HARD, random.Random(0)
+    )
 
     assert battle.to_dict() == before
+
+
+# --- Task 5: 信息边界 ---
+
+
+def battle_with_a_dangerous_enemy():
+    """电脑半血、手里有火球和护盾，困难模式正处在"要不要自保"的分岔上。"""
+    battle = make_battle()
+    battle.enemy.max_hp = 28
+    battle.enemy.hp = 12
+    battle.enemy.shield = 0
+    battle.enemy.energy = 3
+    battle.player.hp = battle.player.max_hp
+    battle.enemy_hand = [
+        {"id": "enemy-fireball", "key": "fireball"},
+        {"id": "enemy-shield", "key": "shield"},
+    ]
+    return battle
+
+
+def fireball_score(battle, difficulty=AIDifficulty.MEDIUM):
+    return next(
+        candidate.score
+        for candidate in rank_enemy_actions(battle.enemy_observation(), difficulty)
+        if candidate.card_id == "enemy-fireball"
+    )
+
+
+def test_the_observation_is_unchanged_when_only_the_player_hand_changes():
+    battle = battle_with_a_dangerous_enemy()
+    before = battle.enemy_observation()
+
+    battle.hand = [{"id": "hidden-fireball", "key": "fireball"}]
+
+    assert battle.enemy_observation() == before
+
+
+def test_hard_ai_rank_is_unchanged_when_only_the_hidden_player_hand_changes():
+    battle = battle_with_a_dangerous_enemy()
+    first = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
+
+    battle.hand = [{"id": "hidden-fireball", "key": "fireball"}]
+
+    assert rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD) == first
+
+
+def test_player_public_state_moves_the_scores_the_hidden_hand_does_not():
+    battle = battle_with_a_dangerous_enemy()
+    before = fireball_score(battle)
+
+    battle.hand = [{"id": "hidden-heal", "key": "heal"}]
+    assert fireball_score(battle) == before
+
+    battle.player.shield = 20
+    assert fireball_score(battle) < before
+
+
+def test_the_observation_carries_the_board_and_its_own_hand():
+    battle = battle_with_a_dangerous_enemy()
+    battle.discard_pile = ["slash", "dodge"]
+
+    observation = battle.enemy_observation()
+
+    assert observation.own_hand == tuple(battle.enemy_hand)
+    assert observation.public_discard_keys == ("slash", "dodge")
+    assert observation.catalog_keys == CATALOG_KEYS
+    assert observation.self_state.hero_key == battle.enemy_hero.key
+    assert (observation.self_state.hp, observation.self_state.shield) == (
+        battle.enemy.hp,
+        battle.enemy.shield,
+    )
+    assert observation.self_state.energy == battle.enemy.energy
+    assert observation.opponent_state.hero_key == battle.hero.key
+    assert observation.opponent_state.max_hp == battle.player.max_hp
+
+
+def test_the_observation_is_a_snapshot_not_a_live_view_of_the_battle():
+    battle = battle_with_a_dangerous_enemy()
+    observation = battle.enemy_observation()
+
+    battle.enemy_hand.clear()
+    battle.enemy.shield = 9
+
+    assert len(observation.own_hand) == 2
+    assert observation.self_state.shield == 0
+
+
+def test_the_observation_types_have_nowhere_to_put_the_opponent_hand_or_deck():
+    """边界靠类型本身守住：这两个 dataclass 里没有能装隐藏信息的字段。"""
+    assert {field.name for field in fields(PublicParticipantState)} == {
+        "hero_key",
+        "max_hp",
+        "hp",
+        "shield",
+        "energy",
+        "skill_used_this_turn",
+    }
+    assert {field.name for field in fields(AIObservation)} == {
+        "self_state",
+        "opponent_state",
+        "own_hand",
+        "public_discard_keys",
+        "catalog_keys",
+        "pending_attack",
+    }
+
+
+def test_threat_estimate_ignores_the_hidden_hand_and_uses_the_public_table():
+    battle = battle_with_a_dangerous_enemy()
+
+    battle.hand = []
+    without_any_card = estimate_player_threat(battle.enemy_observation())
+    battle.hand = [{"id": "hidden-slash", "key": "slash"}]
+    with_a_hidden_slash = estimate_player_threat(battle.enemy_observation())
+
+    # 玩家手里有什么不影响估算；公开牌表里买得起的最强伤害牌才是上界。
+    assert without_any_card == with_a_hidden_slash == CARDS["fireball"].value
+
+
+def test_threat_estimate_never_drops_below_the_public_table_maximum():
+    """技能也要算进去（法师火球术 10、游侠连射 6），只是当前都被火球 14 压过。"""
+    battle = battle_with_a_dangerous_enemy()
+    battle.participants[Side.PLAYER].hero = HEROES["mage"]
+
+    assert estimate_player_threat(battle.enemy_observation()) == CARDS["fireball"].value

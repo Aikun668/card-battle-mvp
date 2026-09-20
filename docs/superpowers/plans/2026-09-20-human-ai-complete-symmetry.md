@@ -377,7 +377,7 @@ git commit -m "feat: make dodge responses symmetric"
 - Consumes: 双方参与者状态和公开行动日志。
 - Produces: `AIObservation`、`BattleState.enemy_observation()` 和只接受 `AIObservation` 的 `rank_enemy_actions()` / `select_enemy_action()`。
 
-- [ ] **Step 1: 写 AI 不读取玩家私有手牌的失败测试**
+- [x] **Step 1: 写 AI 不读取玩家私有手牌的失败测试**
 
 ```python
 def test_hard_ai_rank_is_unchanged_when_only_hidden_player_hand_changes():
@@ -392,13 +392,13 @@ def test_hard_ai_rank_is_unchanged_when_only_hidden_player_hand_changes():
 
 同时测试 AI 能读取自己的手牌、双方公开生命/护盾/能量/英雄、固定牌表与公开弃牌记录。
 
-- [ ] **Step 2: 运行测试，确认当前困难模式遍历 `state.hand`**
+- [x] **Step 2: 运行测试，确认当前困难模式遍历 `state.hand`**
 
 Run: `pytest tests/test_ai.py -q`
 
 Expected: 隐藏手牌改变时，当前 `estimate_player_threat()` 的排序发生变化。
 
-- [ ] **Step 3: 定义受限观察视图**
+- [x] **Step 3: 定义受限观察视图**
 
 ```python
 @dataclass(frozen=True)
@@ -412,22 +412,33 @@ class AIObservation:
 
 `PublicParticipantState` 只包含英雄 key、生命、护盾、能量、技能是否已使用；绝不能包含对方手牌、对方抽牌堆或其顺序。
 
-- [ ] **Step 4: 用公开威胁估计替代窥视手牌**
+- [x] **Step 4: 用公开威胁估计替代窥视手牌**
 
 困难模式的一步前瞻只根据公开英雄技能、玩家当前公开能量、固定牌表和公开弃牌记录估算“潜在最大威胁”；不能读取玩家当前拥有哪一张。所有 AI 评分与选择函数改为只接收 `AIObservation`。
 
-- [ ] **Step 5: 运行信息边界测试**
+- [x] **Step 5: 运行信息边界测试**
 
 Run: `pytest tests/test_ai.py tests/test_battle.py -q`
 
 Expected: 私有玩家手牌变化不影响 AI 排名；公开生命、能量或已打出牌变化会影响 AI 排名。
 
-- [ ] **Step 6: 提交信息边界改动**
+- [x] **Step 6: 提交信息边界改动**
 
 ```bash
 git add game/ai.py game/battle.py tests/test_ai.py tests/test_battle.py
 git commit -m "fix: prevent AI from reading hidden player cards"
 ```
+
+**验收记录（Task 5）**
+
+- 实现要点：`game/ai.py` 里新增两个 frozen dataclass——`PublicParticipantState`（英雄 key、生命上限、生命、护盾、能量、技能是否已用）和 `AIObservation`（双方公开状态 + 自己的手牌 + 公开弃牌记录 + 公开牌表 + 待响应攻击）。`BattleState.enemy_observation()` 是唯一的生产者，`_run_enemy_actions()` 与 `_resolve_enemy_response()` 每次决策都重新构造一份，AI 的每一个评分与选择函数（含 `score_damage/heal/shield/pass/dodge`、`estimate_player_threat`、`rank_enemy_actions/responses`、`select_enemy_action`、`choose_enemy_response`）现在只收 `AIObservation`，签名里再没有 `BattleState`。旧存档/旧调用方没有兼容垫片：边界是硬切。
+- 字段取舍（对计划 Step 3 那行字段表的补充，写在这里备查）：加 `max_hp`——取自 `Combatant` 而不是 `HEROES[hero_key]`，免得换了英雄对象后两者打架（`battle_with_enemy_hero()` 这类用例就会）；加 `pending_attack`——打出的攻击牌是明牌，闪避评分要用它，而计划要求响应函数也只收观察视图；`catalog_keys` 来自新增的 `catalog.CATALOG_KEYS`（`tuple(CARDS)`），威胁估算遍历它而不是直接遍历 `CARDS`，这样"AI 用的每一份信息都来自观察视图"是可读出来的；`public_discard_keys` 放玩家弃牌区。
+- 威胁估算（决策 7）：`estimate_player_threat()` 改为对公开牌表取最坏值——买得起的最强伤害牌（`STARTING_ENERGY = 3` 是玩家下回合的公开能量）+ 玩家英雄的伤害技能。**刻意不用公开弃牌记录收窄**：抽牌堆抽空时弃牌会洗回，"这张已经打掉了"排除不了它下回合回到玩家手上，拿它缩小上界会低估威胁。玩家的技能次数在下回合会重置，所以按"可用"计。
+- 门槛：`compileall`、`ruff check .`、`ruff format --check .` 全绿；`pytest -q` **160 passed**（Task 4 末是 150），全量连跑 8 轮 0 失败。新增 10 个测试：`tests/test_ai.py` 8 个（只改玩家隐藏手牌时观察视图与困难排名都不变、玩家公开护盾会改变伤害评分而隐藏手牌不会、观察视图带回自己手牌与公开记录、观察视图是快照不是活视图、**两个 dataclass 的字段集合被逐字钉死**（有人往里加 `opponent_hand` 会立刻红）、威胁估算忽略隐藏手牌、威胁上界不低于公开牌表最大值），`tests/test_battle.py` 2 个（`enemy_observation()` 以电脑为 self、玩家为 opponent，且 `opponent_state` 上根本没有 hand/draw_pile 属性；待响应攻击会被带进观察视图）。字段集合那条测试是这次唯一防"边界被悄悄放宽"的机关，其余用例只能证明当前实现没读隐藏数据。
+- 真实 HTTP 冒烟（`smoke_task4.py`，单个本地实例、`use_reloader=False`）重跑：玩家攻击 103 次 / 电脑闪避 13 次 / 两段违规均 0，页面冒烟 6 个标记齐全。AI 换数据来源不影响协议层。
+- 平衡探针（`balance_probe7.py`）逐格与 Task 4 **完全一致**（战士 负 30.8 / 32.5 / 31.7，法师 胜 38.3~43.3，游侠 胜 17.5~18.3，龟缩与先手拆解同样不动）。这个"什么都没变"起初很反直觉，于是单独量了一次（`%TEMP%\probe_task5_threat.py`，1659 个电脑决策点）：新旧估算 **100% 的决策点都不同**，危险判定（生命 + 护盾 ≤ 威胁）的命中率从 **3.6% 涨到 35.0%**（最常见的迁移是 `0 -> 14`，1357 次）。再把 `DANGER_PENALTY` 整个置 0 跑同一套探针（`%TEMP%\probe_no_danger.py`）：15 格里有 14 格纹丝不动，只有 `ranger hard` 从 负 80.8% 变 负 80.0%（玩家胜率 17.5% → 18.3%）。**结论：公开口径让困难模式频繁进入警戒状态，但这些新增的警戒局里防御动作本来就已经领先，所以既不更强也不更弱；真正起作用的仍是原先那 3.6% 的关键局。**决策 7 说的"接受困难变弱"实测没有代价。
+- 已知无害冗余：威胁上界里的英雄技能项当前永远被牌表里的火球（14）压住（法师火球术 10、游侠连射 6），所以它暂时不影响任何结果。留着是因为它是决策 7 明确写进模型的公开信息，牌表一改就会生效；`test_threat_estimate_never_drops_below_the_public_table_maximum` 把现状写成了断言，牌表变动时会提醒。
+- 测试改动：`tests/test_ai.py` 里 53 处调用点从 `f(battle, ...)` 改成 `f(battle.enemy_observation(), ...)`——这正是本任务的目的，边界变成调用方必须显式穿过的东西，而不是函数内部偷偷去摸 `state.hand`。
 
 ### Task 6: 公开双方状态、适配路由与完成验收
 

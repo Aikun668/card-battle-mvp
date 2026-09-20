@@ -18,6 +18,9 @@ CARDS: dict[str, CardDefinition] = {
     "dodge": CardDefinition("dodge", "闪避", 1, "dodge", 0),
 }
 
+# 公开牌表的键：AI 的最坏情况估算只能从这里取牌，不能读对手手里有什么。
+CATALOG_KEYS: tuple[str, ...] = tuple(CARDS)
+
 FIXED_DECK_KEYS: list[str] = [
     "slash",
     "slash",

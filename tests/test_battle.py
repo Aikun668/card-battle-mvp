@@ -3,7 +3,7 @@ from collections import Counter
 
 from game.battle import ROUND_LIMIT, BattleState
 from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
-from game.models import AIDifficulty, BattlePhase, Side
+from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
 def make_battle(hero_key="warrior"):
@@ -697,3 +697,38 @@ def test_random_play_stays_consistent_through_both_sides_responses():
                 else:
                     battle.end_turn_for(side)
             assert_consistent(battle)
+
+
+# --- Task 5: AI 信息边界 ---
+
+
+def test_enemy_observation_describes_the_enemy_as_self_and_hides_the_player_deck():
+    battle = make_battle()
+    battle.enemy.shield = 5
+    battle.player.energy = 2
+
+    observation = battle.enemy_observation()
+
+    assert observation.self_state.hero_key == battle.enemy_hero.key
+    assert observation.self_state.shield == 5
+    assert observation.opponent_state.hero_key == battle.hero.key
+    assert observation.opponent_state.energy == 2
+    assert observation.own_hand == tuple(battle.enemy_hand)
+    # 公共弃牌区是明牌，对手手牌与抽牌堆不是——观察视图里根本没有它们的容身之处。
+    assert observation.public_discard_keys == tuple(battle.discard_pile)
+    assert not hasattr(observation.opponent_state, "hand")
+    assert not hasattr(observation.opponent_state, "draw_pile")
+
+
+def test_enemy_observation_carries_the_pending_attack():
+    battle = make_battle()
+    # 打出的攻击牌是明牌，伤害值也是公开的，所以它属于观察视图。
+    battle.pending_attack = PendingAttack(
+        attacker=Side.PLAYER,
+        defender=Side.ENEMY,
+        card_key="heavy_strike",
+        card_name="重击",
+        damage=10,
+    )
+
+    assert battle.enemy_observation().pending_attack == battle.pending_attack
