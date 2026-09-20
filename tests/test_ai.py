@@ -1,11 +1,116 @@
 import random
 
-from game.ai import choose_enemy_card, get_available_enemy_actions
+from game.ai import (
+    choose_enemy_card,
+    get_available_enemy_actions,
+    rank_enemy_actions,
+)
 from game.battle import BattleState
+from game.models import AIDifficulty
 
 
 def make_battle():
     return BattleState.create("warrior", random.Random(3))
+
+
+# --- Task 2: utility scoring ---
+
+
+def test_lethal_heavy_strike_outranks_overkill_fireball():
+    battle = make_battle()
+    battle.player.hp = 8
+    battle.player.shield = 0
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "heavy", "key": "heavy_strike"},
+        {"id": "fireball", "key": "fireball"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.HARD)
+    assert ranked[0].card_id == "heavy"
+
+
+def test_heal_near_max_health_scores_below_damage():
+    battle = make_battle()
+    battle.enemy.hp = battle.enemy.max_hp - 1
+    battle.enemy_hand = [
+        {"id": "heal", "key": "heal"},
+        {"id": "slash", "key": "slash"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].card_id == "slash"
+
+
+def test_existing_shield_makes_further_shield_score_below_attack():
+    battle = make_battle()
+    battle.enemy.hp = battle.enemy.max_hp
+    battle.enemy.shield = 12
+    battle.enemy_hand = [
+        {"id": "shield", "key": "shield"},
+        {"id": "slash", "key": "slash"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].card_id == "slash"
+
+
+def test_actual_healing_outranks_plain_attack_when_hurt_and_no_kill_exists():
+    battle = make_battle()
+    battle.enemy.hp = 10
+    battle.player.hp = battle.player.max_hp
+    battle.enemy_hand = [
+        {"id": "heal", "key": "heal"},
+        {"id": "slash", "key": "slash"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].card_id == "heal"
+
+
+def test_attack_through_shield_only_scores_the_damage_that_lands():
+    battle = make_battle()
+    battle.enemy.hp = battle.enemy.max_hp
+    battle.player.hp = battle.player.max_hp
+    battle.player.shield = 6
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "slash", "key": "slash"},
+        {"id": "heavy", "key": "heavy_strike"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].card_id == "heavy"
+
+
+def test_a_dying_enemy_defends_instead_of_trading_damage():
+    battle = make_battle()
+    battle.enemy.hp = 6
+    battle.player.hp = battle.player.max_hp
+    battle.enemy_hand = [
+        {"id": "fireball", "key": "fireball"},
+        {"id": "heal", "key": "heal"},
+    ]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].card_id == "heal"
+
+
+def test_pass_ranks_last_when_a_useful_action_exists():
+    battle = make_battle()
+    battle.enemy_hand = [{"id": "slash", "key": "slash"}]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[-1].kind == "pass"
+
+
+def test_pass_outranks_a_heal_that_would_restore_nothing():
+    battle = make_battle()
+    battle.enemy.hp = battle.enemy.max_hp
+    battle.enemy_hand = [{"id": "heal", "key": "heal"}]
+    ranked = rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert ranked[0].kind == "pass"
+
+
+def test_ranking_does_not_mutate_the_battle():
+    battle = make_battle()
+    battle.enemy_hand = [{"id": "slash", "key": "slash"}]
+    before = battle.to_dict()
+    rank_enemy_actions(battle, AIDifficulty.MEDIUM)
+    assert battle.to_dict() == before
 
 
 def test_available_enemy_actions_include_affordable_cards_and_pass():
