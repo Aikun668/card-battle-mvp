@@ -1,12 +1,12 @@
 import random
 
-from game.battle import BattleState
-from game.catalog import HEROES
+from game.battle import ROUND_LIMIT, BattleState
+from game.catalog import FIXED_DECK_KEYS, HEROES
 from game.models import AIDifficulty, BattlePhase, Side
 
 
 def make_battle(hero_key="warrior"):
-    return BattleState.create(hero_key, random.Random(7))
+    return BattleState.create(hero_key, random.Random(7), starting_side=Side.PLAYER)
 
 
 def test_new_battle_has_five_cards_three_energy_and_player_turn():
@@ -31,7 +31,7 @@ def test_new_battle_assigns_two_heroes_from_the_same_roster():
 
 
 def test_participants_expose_both_sides_private_zones():
-    battle = BattleState.create("ranger", random.Random(3))
+    battle = BattleState.create("ranger", random.Random(3), starting_side=Side.PLAYER)
     player = battle.participant(Side.PLAYER)
     enemy = battle.participant(Side.ENEMY)
     assert battle.opponent_of(Side.PLAYER) is enemy
@@ -60,16 +60,115 @@ def test_enemy_hero_varies_across_games():
     assert picked == set(HEROES)
 
 
-def test_starting_side_defaults_to_the_player():
-    assert (
-        BattleState.create("warrior", random.Random(7)).phase is BattlePhase.PLAYER_TURN
-    )
+def test_starting_side_is_drawn_from_the_rng_for_both_sides():
+    sides = {
+        BattleState.create("warrior", random.Random(seed)).starting_side
+        for seed in range(20)
+    }
+    assert sides == {Side.PLAYER, Side.ENEMY}
+
+
+def test_created_battle_never_leaves_the_enemy_turn_pending():
+    for seed in range(20):
+        battle = BattleState.create("warrior", random.Random(seed))
+        assert battle.phase in (
+            BattlePhase.PLAYER_TURN,
+            BattlePhase.VICTORY,
+            BattlePhase.DEFEAT,
+        )
 
 
 def test_starting_side_can_hand_the_first_turn_to_the_enemy():
     battle = BattleState.create("warrior", random.Random(7), starting_side=Side.ENEMY)
-    assert battle.phase is BattlePhase.ENEMY_TURN
     assert battle.starting_side is Side.ENEMY
+    # 电脑先手时，创建流程会同步跑完它这一回合，再把行动权交回玩家。
+    assert any(entry.startswith("电脑使用") for entry in battle.log)
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.round_number == 1
+    assert battle.player.energy == 3
+    assert len(battle.hand) == 5
+
+
+def test_both_sides_receive_the_same_fixed_deck_composition():
+    battle = make_battle()
+    for side in (Side.PLAYER, Side.ENEMY):
+        participant = battle.participant(side)
+        keys = (
+            [card["key"] for card in participant.hand]
+            + list(participant.draw_pile)
+            + list(participant.discard_pile)
+        )
+        assert sorted(keys) == sorted(FIXED_DECK_KEYS)
+
+
+def test_enemy_shield_persists_across_its_own_turns():
+    battle = make_battle()
+    battle.enemy.shield = 6
+    battle.enemy_hand = []
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    assert battle.enemy.shield == 6
+
+
+def test_energy_carries_into_the_opponent_turn_and_refreshes_on_your_own():
+    battle = make_battle()
+    battle.hand = []
+    battle.enemy_hand = []
+    battle.player.energy = 1
+    battle.end_player_turn()
+    assert battle.player.energy == 1
+    battle.resolve_enemy_turn()
+    assert battle.player.energy == 3
+
+
+def test_each_side_draws_one_card_at_the_start_of_its_own_next_turn():
+    battle = make_battle()
+    battle.hand = []
+    battle.enemy_hand = []
+    battle.end_player_turn()
+    assert battle.enemy_hand == []
+    battle.resolve_enemy_turn()
+    assert len(battle.hand) == 1
+    battle.end_player_turn()
+    assert len(battle.enemy_hand) == 1
+
+
+def test_skill_availability_refreshes_at_the_start_of_your_own_turn():
+    battle = make_battle()
+    battle.hand = []
+    battle.enemy_hand = []
+    assert battle.use_skill().ok is True
+    assert battle.skill_used_this_turn is True
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+    assert battle.skill_used_this_turn is False
+
+
+def test_round_limit_lets_each_side_act_ten_times():
+    for first_side in (Side.PLAYER, Side.ENEMY):
+        battle = BattleState.create(
+            "warrior", random.Random(7), starting_side=first_side
+        )
+        # 电脑先手时 create() 已经替它跑完第一个回合。
+        turns = {Side.PLAYER: 0, Side.ENEMY: 1 if first_side is Side.ENEMY else 0}
+        for _ in range(4 * ROUND_LIMIT):
+            if battle.is_finished():
+                break
+            if battle.phase is BattlePhase.RESPONSE:
+                battle.respond("pass")
+                continue
+            side = (
+                Side.PLAYER if battle.phase is BattlePhase.PLAYER_TURN else Side.ENEMY
+            )
+            turns[side] += 1
+            if side is Side.PLAYER:
+                battle.hand = []
+                battle.end_player_turn()
+            else:
+                battle.enemy_hand = []
+                battle.resolve_enemy_turn()
+        assert battle.phase is BattlePhase.DRAW
+        assert turns == {Side.PLAYER: ROUND_LIMIT, Side.ENEMY: ROUND_LIMIT}
 
 
 def test_damage_uses_shield_before_health():

@@ -17,6 +17,14 @@ def side_state(session: dict, side: str) -> dict:
     return session["battle"]["participants"][side]
 
 
+def freeze_enemy_hand(session: dict, hand: list[dict]) -> None:
+    """锁死电脑手牌：抽牌区和弃牌区清空后，它回合开始的补牌就抽不到东西。"""
+    enemy = side_state(session, "enemy")
+    enemy["hand"] = hand
+    enemy["draw_pile"] = []
+    enemy["discard_pile"] = []
+
+
 def test_root_is_backend_health_metadata_and_demo_is_explicit(tmp_path):
     client = make_client(tmp_path)
 
@@ -77,6 +85,8 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     client.post("/api/game", json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         side_state(session, "player")["hand"] = [{"id": "player-slash", "key": "slash"}]
+        # 电脑先手时可能已经给自己叠了护盾，护盾现在会跨回合保留，先清零才好验证伤害。
+        side_state(session, "enemy")["combatant"]["shield"] = 0
         session.modified = True
     state = client.get("/api/game").get_json()["data"]
     card_id = next(card["id"] for card in state["hand"] if card["key"] == "slash")
@@ -91,7 +101,7 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     with client.session_transaction() as session:
         player = side_state(session, "player")
         player["hand"] = [card for card in player["hand"] if card["key"] != "dodge"]
-        side_state(session, "enemy")["hand"] = [{"id": "enemy-shield", "key": "shield"}]
+        freeze_enemy_hand(session, [{"id": "enemy-shield", "key": "shield"}])
         session.modified = True
 
     end_turn_response = client.post("/api/game/actions/end-turn")
@@ -189,9 +199,8 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
         player = side_state(session, "player")
         player["combatant"]["energy"] = 2
         player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        side_state(session, "enemy")["hand"] = [
-            {"id": "enemy-heavy", "key": "heavy_strike"}
-        ]
+        freeze_enemy_hand(session, [{"id": "enemy-heavy", "key": "heavy_strike"}])
+        hp_before = player["combatant"]["hp"]
         session.modified = True
 
     end_turn = client.post("/api/game/actions/end-turn")
@@ -199,7 +208,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
 
     assert end_turn.status_code == 200
     assert paused["phase"] == "RESPONSE"
-    assert paused["player"]["hp"] == 32
+    assert paused["player"]["hp"] == hp_before
     assert paused["player"]["energy"] == 2
     assert paused["response"] == {
         "active": True,
@@ -220,7 +229,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
 
     assert response.status_code == 200
     assert state["phase"] == "PLAYER_TURN"
-    assert state["player"]["hp"] == 32
+    assert state["player"]["hp"] == hp_before
     assert state["player"]["energy"] == 3
     assert "玩家使用【闪避】，抵消了本次伤害" in state["log"]
 
@@ -233,9 +242,8 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
         player["combatant"]["energy"] = 1
         player["combatant"]["shield"] = 4
         player["hand"] = [{"id": "player-dodge", "key": "dodge"}]
-        side_state(session, "enemy")["hand"] = [
-            {"id": "enemy-heavy", "key": "heavy_strike"}
-        ]
+        freeze_enemy_hand(session, [{"id": "enemy-heavy", "key": "heavy_strike"}])
+        hp_before = player["combatant"]["hp"]
         session.modified = True
 
     client.post("/api/game/actions/end-turn")
@@ -247,6 +255,7 @@ def test_api_can_pass_enemy_attack_response(tmp_path):
 
     assert response.status_code == 200
     assert state["phase"] == "PLAYER_TURN"
-    assert state["player"]["hp"] == 26
+    # 4 点护盾先吸收，剩下 6 点才扣生命。
+    assert state["player"]["hp"] == hp_before - 6
     assert state["player"]["shield"] == 0
     assert "电脑使用【重击】，对你造成 10 点伤害" in state["log"]

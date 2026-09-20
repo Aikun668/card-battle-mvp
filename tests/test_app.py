@@ -92,7 +92,9 @@ def test_match_result_written_to_sqlite_exactly_once(tmp_path):
     client = make_client(tmp_path)
     client.post("/demo/heroes", data={"hero_key": "warrior"})
     with client.session_transaction() as s:
-        side_state(s, "enemy")["combatant"]["hp"] = 1
+        enemy = side_state(s, "enemy")
+        enemy["combatant"]["hp"] = 1
+        enemy["combatant"]["shield"] = 0
         side_state(s, "player")["hand"] = [{"id": "x", "key": "slash"}]
         s.modified = True
     client.post("/demo/battle/card/x")  # kills enemy -> VICTORY -> writes to DB

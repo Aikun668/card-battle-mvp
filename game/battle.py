@@ -20,8 +20,10 @@ ROUND_LIMIT = 10
 ENEMY_NAME = "电脑"
 # 旧 session 缺少电脑英雄信息时使用的默认英雄，见 _migrate_legacy_participants()。
 LEGACY_ENEMY_HERO_KEY = "warrior"
-# 电脑无法主动打出闪避（见 game/ai.py 的 ENEMY_UNUSABLE_EFFECTS），发到它手里只是废牌。
-ENEMY_DECK_KEYS = [key for key in FIXED_DECK_KEYS if key != "dodge"]
+
+OPPONENT_SIDE = {Side.PLAYER: Side.ENEMY, Side.ENEMY: Side.PLAYER}
+TURN_PHASE = {Side.PLAYER: BattlePhase.PLAYER_TURN, Side.ENEMY: BattlePhase.ENEMY_TURN}
+SIDE_PHASE = {phase: side for side, phase in TURN_PHASE.items()}
 
 
 def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
@@ -80,7 +82,7 @@ class BattleState:
         return self.participants[side]
 
     def opponent_of(self, side: Side) -> ParticipantState:
-        return self.participants[Side.ENEMY if side is Side.PLAYER else Side.PLAYER]
+        return self.participants[OPPONENT_SIDE[side]]
 
     @property
     def hero(self) -> HeroDefinition:
@@ -108,7 +110,7 @@ class BattleState:
     ) -> "BattleState":
         hero = HEROES[hero_key]
         enemy_hero = choose_enemy_hero(rng)
-        first_side = starting_side or Side.PLAYER
+        first_side = starting_side or rng.choice(list(Side))
         state = cls(
             participants={
                 Side.PLAYER: ParticipantState(
@@ -128,14 +130,12 @@ class BattleState:
                         hp=enemy_hero.max_hp,
                     ),
                     hand=[],
-                    draw_pile=_shuffled_deck(rng, ENEMY_DECK_KEYS),
+                    draw_pile=_shuffled_deck(rng, FIXED_DECK_KEYS),
                     discard_pile=[],
                 ),
             },
             round_number=1,
-            phase=BattlePhase.PLAYER_TURN
-            if first_side is Side.PLAYER
-            else BattlePhase.ENEMY_TURN,
+            phase=TURN_PHASE[first_side],
             log=[],
             rng=rng,
             ai_difficulty=ai_difficulty,
@@ -143,45 +143,39 @@ class BattleState:
         )
         state.log.append(f"战斗开始，玩家选择角色：{hero.name}")
         state.log.append(f"电脑选择角色：{enemy_hero.name}")
-        state.draw_cards(STARTING_HAND)
-        state._draw_enemy_cards(STARTING_HAND)
+        for side in (Side.PLAYER, Side.ENEMY):
+            state.draw_cards_for(side, STARTING_HAND)
+        if first_side is Side.ENEMY:
+            # 电脑先手时在创建流程里同步跑完，调用方只需要处理玩家回合或终局；
+            # 开局这一次攻击发生在玩家看到棋盘之前，按放弃响应结算。
+            state.resolve_enemy_turn()
+            while state.phase is BattlePhase.RESPONSE:
+                state.respond("pass")
         return state
-
-    def _draw_enemy_cards(self, count: int) -> int:
-        drawn = 0
-        for _ in range(count):
-            if len(self.enemy_hand) >= HAND_LIMIT:
-                break
-            if not self.enemy_draw_pile:
-                if not self.enemy_discard_pile:
-                    break
-                self.enemy_draw_pile.extend(self.enemy_discard_pile)
-                self.enemy_discard_pile.clear()
-                self.rng.shuffle(self.enemy_draw_pile)
-            key = self.enemy_draw_pile.pop()
-            self.enemy_hand.append({"id": f"enemy-{uuid.uuid4().hex[:8]}", "key": key})
-            drawn += 1
-        return drawn
 
     def _new_card_id(self) -> str:
         return f"card-{uuid.uuid4().hex[:8]}"
 
-    def draw_cards(self, count: int) -> int:
+    def draw_cards_for(self, side: Side, count: int) -> int:
+        participant = self.participant(side)
         drawn = 0
         for _ in range(count):
-            if len(self.hand) >= HAND_LIMIT:
+            if len(participant.hand) >= HAND_LIMIT:
                 self.log.append("手牌已满，本回合没有抽到新牌")
                 break
-            if not self.draw_pile:
-                if not self.discard_pile:
+            if not participant.draw_pile:
+                if not participant.discard_pile:
                     break
-                self.draw_pile.extend(self.discard_pile)
-                self.discard_pile.clear()
-                self.rng.shuffle(self.draw_pile)
-            key = self.draw_pile.pop()
-            self.hand.append({"id": self._new_card_id(), "key": key})
+                participant.draw_pile.extend(participant.discard_pile)
+                participant.discard_pile.clear()
+                self.rng.shuffle(participant.draw_pile)
+            key = participant.draw_pile.pop()
+            participant.hand.append({"id": self._new_card_id(), "key": key})
             drawn += 1
         return drawn
+
+    def draw_cards(self, count: int) -> int:
+        return self.draw_cards_for(Side.PLAYER, count)
 
     def apply_damage(self, target: Combatant, amount: int) -> int:
         if amount <= 0:
@@ -291,22 +285,49 @@ class BattleState:
         elif self.player.hp <= 0:
             self.phase = BattlePhase.DEFEAT
 
+    def current_side(self) -> Side | None:
+        return SIDE_PHASE.get(self.phase)
+
+    def start_turn(self, side: Side, *, initial: bool = False) -> None:
+        """回合开始：回满能量、重置技能次数；只有本局首回合不额外补牌。"""
+        participant = self.participant(side)
+        participant.skill_used_this_turn = False
+        participant.combatant.energy = STARTING_ENERGY
+        if not initial:
+            self.draw_cards_for(side, 1)
+
+    def advance_turn(self) -> ActionResult:
+        side = self.current_side()
+        if side is None:
+            return ActionResult(False, "当前没有行动方")
+        # 后手方打完才轮到先手方开新回合，所以 10 回合上限等于双方各行动 10 次。
+        starts_new_round = side is not self.starting_side
+        is_game_opening = side is self.starting_side and self.round_number == 1
+        if starts_new_round and self.round_number >= ROUND_LIMIT:
+            self.phase = BattlePhase.DRAW
+            self.log.append(f"达到 {ROUND_LIMIT} 回合上限，本局平局")
+            return ActionResult(True, "")
+        next_side = OPPONENT_SIDE[side]
+        if starts_new_round:
+            self.round_number += 1
+            self.log.append(f"第 {self.round_number} 回合开始")
+        self.phase = TURN_PHASE[next_side]
+        self.start_turn(next_side, initial=is_game_opening)
+        return ActionResult(True, "")
+
     def end_player_turn(self) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
         if self.phase is not BattlePhase.PLAYER_TURN:
             return ActionResult(False, "现在是电脑回合，请等待电脑行动")
-        self.phase = BattlePhase.ENEMY_TURN
         self.log.append(f"第 {self.round_number} 回合结束，电脑开始行动")
-        return ActionResult(True, "")
+        return self.advance_turn()
 
     def resolve_enemy_turn(self) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
         if self.phase is not BattlePhase.ENEMY_TURN:
             return ActionResult(False, "还没有进入电脑回合")
-        self.enemy.energy = STARTING_ENERGY
-        self.enemy.shield = 0
         return self._run_enemy_actions()
 
     def _run_enemy_actions(self) -> ActionResult:
@@ -331,18 +352,8 @@ class BattleState:
     def _complete_enemy_turn(self) -> ActionResult:
         if self.is_finished():
             return ActionResult(True, "")
-        if self.round_number >= ROUND_LIMIT:
-            self.phase = BattlePhase.DRAW
-            self.log.append(f"达到 {ROUND_LIMIT} 回合上限，本局平局")
-            return ActionResult(True, "")
-        self.round_number += 1
-        self.phase = BattlePhase.PLAYER_TURN
-        self.player.energy = STARTING_ENERGY
-        self.skill_used_this_turn = False
-        self.draw_cards(1)
-        self._draw_enemy_cards(1)
-        self.log.append(f"第 {self.round_number} 回合开始")
-        return ActionResult(True, "")
+        self.log.append(f"第 {self.round_number} 回合结束，玩家开始行动")
+        return self.advance_turn()
 
     def _find_dodge_index(self) -> int:
         for index, card in enumerate(self.hand):

@@ -7,11 +7,11 @@ from game.ai import (
 )
 from game.battle import BattleState
 from game.catalog import FIXED_DECK_KEYS
-from game.models import AIDifficulty, BattlePhase
+from game.models import AIDifficulty, BattlePhase, Side
 
 
 def make_battle():
-    return BattleState.create("warrior", random.Random(3))
+    return BattleState.create("warrior", random.Random(3), starting_side=Side.PLAYER)
 
 
 def battle_with_three_ranked_choices():
@@ -331,12 +331,11 @@ def test_enemy_passes_when_it_cannot_afford_any_card():
 def test_enemy_re_ranks_actions_after_each_play():
     battle = make_battle()
     battle.ai_difficulty = AIDifficulty.HARD
-    battle.enemy.energy = 3
+    battle.end_player_turn()
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    battle.end_player_turn()
     battle.resolve_enemy_turn()
     # 重击花掉 2 点能量，剩余 1 点只够斩击：第二次选择必须重新读取扣费后的状态。
     assert log_index(battle, "电脑使用【重击】") < log_index(battle, "电脑使用【斩击】")
@@ -347,12 +346,11 @@ def test_enemy_re_ranks_actions_after_each_play():
 def test_enemy_stops_playing_once_energy_runs_out():
     battle = make_battle()
     battle.ai_difficulty = AIDifficulty.HARD
-    battle.enemy.energy = 3
+    battle.end_player_turn()
     battle.enemy_hand = [
         {"id": "enemy-fireball", "key": "fireball"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    battle.end_player_turn()
     battle.resolve_enemy_turn()
     assert battle.player.hp == 32 - 14
     assert all("斩击" not in entry for entry in battle.log)
@@ -363,12 +361,11 @@ def test_enemy_stops_playing_the_moment_the_player_dies():
     battle.ai_difficulty = AIDifficulty.HARD
     battle.hand = []
     battle.player.hp = 6
-    battle.enemy.energy = 3
+    battle.end_player_turn()
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    battle.end_player_turn()
     battle.resolve_enemy_turn()
     assert battle.phase is BattlePhase.DEFEAT
     assert battle.player.hp == 0
@@ -382,21 +379,20 @@ def test_enemy_energy_starts_fresh_every_enemy_turn():
     battle = make_battle()
     battle.ai_difficulty = AIDifficulty.HARD
     battle.enemy.energy = 0
-    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     battle.end_player_turn()
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     battle.resolve_enemy_turn()
     assert battle.player.hp == 32 - 6
 
 
-def test_enemy_deck_never_contains_dodge():
+def test_enemy_deck_is_the_same_fixed_deck_as_the_player():
     battle = make_battle()
     enemy_keys = (
         [card["key"] for card in battle.enemy_hand]
         + list(battle.enemy_draw_pile)
         + list(battle.enemy_discard_pile)
     )
-    assert "dodge" not in enemy_keys
-    assert len(enemy_keys) == len(FIXED_DECK_KEYS) - 1
+    assert sorted(enemy_keys) == sorted(FIXED_DECK_KEYS)
 
 
 def test_passing_a_response_resumes_the_remaining_enemy_actions():
@@ -404,12 +400,11 @@ def test_passing_a_response_resumes_the_remaining_enemy_actions():
     battle.ai_difficulty = AIDifficulty.HARD
     battle.player.energy = 3
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
-    battle.enemy.energy = 3
+    battle.end_player_turn()
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    battle.end_player_turn()
     battle.resolve_enemy_turn()
     assert battle.phase is BattlePhase.RESPONSE
     battle.respond("pass")
@@ -427,12 +422,11 @@ def test_dodging_one_attack_lets_the_next_one_land():
     battle.ai_difficulty = AIDifficulty.HARD
     battle.player.energy = 3
     battle.hand = [{"id": "player-dodge", "key": "dodge"}]
-    battle.enemy.energy = 3
+    battle.end_player_turn()
     battle.enemy_hand = [
         {"id": "enemy-heavy", "key": "heavy_strike"},
         {"id": "enemy-slash", "key": "slash"},
     ]
-    battle.end_player_turn()
     battle.resolve_enemy_turn()
     battle.respond("dodge")
     # 闪避用掉后手里没有第二张闪避，剩下的斩击直接结算。
@@ -443,10 +437,9 @@ def test_dodging_one_attack_lets_the_next_one_land():
 
 def test_end_turn_runs_enemy_actions_until_pass():
     battle = make_battle()
-    battle.enemy.energy = 3
-    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     initial_hp = battle.player.hp
     assert battle.end_player_turn().ok is True
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
     result = battle.resolve_enemy_turn()
     assert result.ok is True
     assert battle.player.hp == initial_hp - 6
@@ -458,8 +451,8 @@ def test_end_turn_runs_enemy_actions_until_pass():
 
 def test_resolve_enemy_turn_with_no_affordable_card_still_returns_to_player():
     battle = make_battle()
-    battle.enemy_hand = []
     battle.end_player_turn()
+    battle.enemy_hand = []
     battle.resolve_enemy_turn()
     assert battle.phase.value == "PLAYER_TURN"
     assert battle.player.hp == 32  # undamaged

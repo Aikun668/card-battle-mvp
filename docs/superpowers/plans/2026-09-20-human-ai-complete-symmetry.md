@@ -151,7 +151,7 @@ git commit -m "refactor: model both combatants as equal participants"
 - Consumes: Task 1 的 `Side` 和 `ParticipantState`。
 - Produces: `draw_cards_for(side, count)`、`start_turn(side, *, initial=False)`、`advance_turn()` 和可测试的 `starting_side` 创建参数。
 
-- [ ] **Step 1: 写双方相同牌库、随机先手与护盾持久测试**
+- [x] **Step 1: 写双方相同牌库、随机先手与护盾持久测试**
 
 ```python
 def test_both_sides_receive_the_same_fixed_deck_composition():
@@ -172,32 +172,45 @@ def test_enemy_shield_persists_until_player_damage_consumes_it():
 
 另写测试覆盖：显式 `starting_side=Side.ENEMY` 时电脑先行动；未传时由 RNG 决定；任一方自己的第二回合才抽 1 张并恢复 3 点能量。
 
-- [ ] **Step 2: 运行测试，确认电脑牌库缺闪避且其护盾会被单独清零**
+- [x] **Step 2: 运行测试，确认电脑牌库缺闪避且其护盾会被单独清零**
 
 Run: `pytest tests/test_battle.py tests/test_catalog.py -q`
 
 Expected: 牌库相同与护盾持久测试失败。
 
-- [ ] **Step 3: 删除电脑专属牌库与资源特例**
+- [x] **Step 3: 删除电脑专属牌库与资源特例**
 
 删除 `ENEMY_DECK_KEYS` 和所有按“电脑 / 玩家”复制的抽牌代码，双方各用 `list(FIXED_DECK_KEYS)` 洗牌。删除 `resolve_enemy_turn()` 中的 `self.enemy.shield = 0`。用一个参与方参数化的抽牌函数统一手牌上限、弃牌回洗和日志。
 
-- [ ] **Step 4: 实现通用回合推进与公平先手**
+- [x] **Step 4: 实现通用回合推进与公平先手**
 
 `start_turn(side, initial=False)` 在非初始回合抽 1 张、恢复该方能量为 3、重置该方技能次数；`advance_turn()` 切换到对手。`BattleState.create()` 接受只供测试使用的 `starting_side: Side | None`；传 `None` 时由 RNG 均匀选择。
 
-- [ ] **Step 5: 运行资源与回合测试**
+- [x] **Step 5: 运行资源与回合测试**
 
 Run: `pytest tests/test_battle.py tests/test_catalog.py -q`
 
 Expected: 双方牌库均含 13 张和 1 张闪避；护盾只受伤害影响；两种先手均可完成第一轮。
 
-- [ ] **Step 6: 提交资源规则改动**
+- [x] **Step 6: 提交资源规则改动**
 
 ```bash
 git add game/battle.py game/catalog.py tests/test_battle.py tests/test_catalog.py
 git commit -m "feat: unify player and enemy resource rules"
 ```
+
+**验收记录（Task 2）**
+
+- 实际改动文件：`game/battle.py`（主体）、`tests/test_battle.py`、`tests/test_ai.py`、`tests/test_api.py`、`tests/test_app.py`、`tests/test_acceptance_scenarios.py`。`game/catalog.py`、`tests/test_catalog.py` 无需改动——`FIXED_DECK_KEYS` 已是双方共用的唯一牌库，`ENEMY_DECK_KEYS` 此前已随 Task 1 删除。
+- 实现要点：新增 `OPPONENT_SIDE` / `TURN_PHASE` / `SIDE_PHASE` 三个映射与 `current_side()`、`start_turn(side, *, initial=False)`、`advance_turn()`；`draw_cards_for(side, count)` 取代原来玩家/电脑两套抽牌代码；`create()` 先 `rng.choice(list(Side))` 定先手，电脑先手时在创建流程内同步跑完它的第一个回合；`resolve_enemy_turn()` 删掉了 `self.enemy.shield = 0`，护盾现在只有伤害能削。
+- 回合计数按决策 2：先手方开新回合才 `round_number += 1`，因此 `ROUND_LIMIT = 10` 等于双方各行动 10 次。`test_round_limit_lets_each_side_act_ten_times` 对两种先手都验证了各 10 次后进入 `DRAW`。
+- 门禁：`compileall` 通过、`ruff check .` 通过、`ruff format --check .` 23 文件通过、`pytest -q` **119 passed**，连续 10 次全绿（Task 1 结束时是 112 passed）。
+- 真实的非 test-client HTTP 冒烟（`python app.py` + `urllib`，脚本 `%TEMP%\smoke_task2.py`）：连续 12 次 `POST /api/game` 全部 201 且 `phase=PLAYER_TURN`（从没出现过 `ENEMY_TURN` 或 `RESPONSE`），先手分布 7:5；电脑最大生命值指纹出现 24/27/32 三种，证明随机英雄贯通；`POST actions/card` 200（能量 3→1、手牌 5→4）；`POST actions/end-turn` 200（`round=2`、能量回到 3、技能重置为未使用）；`/demo` 含难度选项、`/demo/heroes` 含确认角色、`/demo/battle` 六个状态标记齐全、`/` 健康检查 200。
+- 平衡探针（`%TEMP%\balance_probe5.py`，120 局/格，困难 AI，贪心玩家，先手随机）：战士 胜 0.8% / 负 0% / **平 99.2%**、平均 10.0 回合；法师 胜 49.2% / 负 50.8%、2.8 回合；游侠 胜 43.3% / 负 56.7%、3.6 回合。按先手拆战士：玩家先手 胜 1.7% / 平 98.3%，电脑先手 平 100.0%——**先手不再是决定因素，平局锁与先手无关**。难度表（简单/中等/困难）对战士读数完全相同，因为电脑三种难度都不使用英雄技能，而平局锁恰恰由技能造成。
+- 归因探针（`%TEMP%\balance_probe6.py`，禁用玩家技能做对照）：战士禁技能后立刻变成 胜 60.0% / 负 39.2% / 平 0.8%、6.0 回合；"只叠盾不进攻"的龟缩变体在**有技能**时 100% 平局、0% 战败（即不可战胜），禁技能后变成 97.5% 战败。**结论：本轮的平局锁与龟缩不可战胜，成因是玩家独有的战士技能（2 能量换 8 护盾）强于电脑 3 能量能打出的任何输出（上限 16 = 重击 10 + 斩击 6），而 `game/ai.py` 至今没有技能逻辑（文件第 8 行注释即"电脑没有英雄技能"）。护盾跨回合只是放大了这个不对称，不是根因。**按决策 8 本轮不加护盾上限，等 Task 3 让电脑拥有技能后复测。
+- 偏差 1（需要你确认）：决策 3 要求创建接口只返回玩家回合或终局，但电脑先手时它的开局攻击可能触发 `RESPONSE`。我的处理是在 `create()` 里用 `while state.phase is RESPONSE: state.respond("pass")` 自动按"放弃"结算——理由是这次攻击发生在玩家看到棋盘之前，玩家不可能对还没渲染的攻击做出响应。副作用：电脑先手时玩家可能开局先掉一次血（最大 16），且这一局玩家没有闪避机会。
+- 偏差 2（文档笔误）：本计划决策 3 的注释写"电脑第一回合最多造成 18 点伤害"，实际上限是 16（重击 10 + 斩击 6，3 能量打不出第二张重击）。"首回合不可能击杀"的结论不变（战士血量 32）。
+- 顺带修掉的测试脆弱点：`tests/test_ai.py` 里 8 个电脑回合测试原本在 `end_player_turn()` 之前赋值 `enemy_hand`，而电脑现在在**自己回合开始**抽牌，会把固定手牌冲掉，改为在 `end_player_turn()` 之后赋值；`tests/test_api.py` / `test_app.py` 因为路由用的是非种子 RNG，改为读 session 基线算增量，并用 `freeze_enemy_hand` 清空电脑两个牌区来锁死它的手牌。
 
 ### Task 3: 将卡牌、技能与结束行动改成双方共享的合法动作
 

@@ -49,8 +49,13 @@ def test_acceptance_walk_through():
     with client.session_transaction() as s:
         player = side_state(s, "player")
         enemy = side_state(s, "enemy")
+        # 先手方由 RNG 决定；电脑先手时它的第一个回合已经在创建流程里跑完，
+        # 页面直接进入玩家回合，玩家不会看到等待电脑行动的中转状态。
         assert s["battle"]["phase"] == "PLAYER_TURN"
-        assert player["combatant"]["hp"] == 32
+        assert s["battle"]["starting_side"] in ("player", "enemy")
+        if s["battle"]["starting_side"] == "enemy":
+            assert any(e.startswith("电脑使用") for e in s["battle"]["log"])
+        assert 0 < player["combatant"]["hp"] <= player["combatant"]["max_hp"]
         assert enemy["hero_key"] in HEROES
         assert enemy["combatant"]["hp"] == enemy["combatant"]["max_hp"]
         assert player["combatant"]["energy"] == 3
@@ -59,7 +64,10 @@ def test_acceptance_walk_through():
     # Scenario 4 — normal card play
     with client.session_transaction() as s:
         side_state(s, "player")["hand"] = [{"id": "p-s", "key": "slash"}]
-        enemy_hp_before = side_state(s, "enemy")["combatant"]["hp"]
+        enemy = side_state(s, "enemy")
+        # 电脑先手时可能已经叠过护盾，护盾现在跨回合保留，先清零才能验证伤害。
+        enemy["combatant"]["shield"] = 0
+        enemy_hp_before = enemy["combatant"]["hp"]
         s.modified = True
     client.post("/demo/battle/card/p-s", follow_redirects=True)
     with client.session_transaction() as s:
@@ -106,6 +114,9 @@ def test_acceptance_walk_through():
             {"id": "e-s1", "key": "slash"},
             {"id": "e-s2", "key": "slash"},
         ]
+        # 清空电脑的牌区，它这一回合就补不到新牌，手牌固定为上面两张。
+        enemy["draw_pile"] = []
+        enemy["discard_pile"] = []
         enemy["combatant"]["shield"] = 0
         player["combatant"]["shield"] = 0
         player["combatant"]["hp"] = 32
@@ -135,7 +146,9 @@ def test_acceptance_walk_through():
 
     # Scenario 9 — terminal state blocks further actions, writes one row
     with client.session_transaction() as s:
-        side_state(s, "enemy")["combatant"]["hp"] = 1
+        enemy = side_state(s, "enemy")
+        enemy["combatant"]["hp"] = 1
+        enemy["combatant"]["shield"] = 0
         side_state(s, "player")["hand"] = [{"id": "p-kill", "key": "slash"}]
         s["battle"]["phase"] = "PLAYER_TURN"
         s.modified = True
