@@ -2,7 +2,7 @@ import random
 from collections import Counter
 
 from game.battle import ROUND_LIMIT, BattleState
-from game.catalog import CARDS, FIXED_DECK_KEYS, HEROES
+from game.catalog import CARDS, HERO_DECKS, HEROES
 from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
@@ -100,16 +100,19 @@ def test_starting_side_can_hand_the_first_turn_to_the_enemy():
     assert len(battle.hand) == 5
 
 
-def test_both_sides_receive_the_same_fixed_deck_composition():
-    battle = make_battle()
-    for side in (Side.PLAYER, Side.ENEMY):
-        participant = battle.participant(side)
-        keys = (
-            [card["key"] for card in participant.hand]
-            + list(participant.draw_pile)
-            + list(participant.discard_pile)
+def test_each_side_shuffles_its_own_hero_deck():
+    for hero_key in HEROES:
+        battle = BattleState.create(
+            hero_key, random.Random(7), starting_side=Side.PLAYER
         )
-        assert sorted(keys) == sorted(FIXED_DECK_KEYS)
+        for side in (Side.PLAYER, Side.ENEMY):
+            participant = battle.participant(side)
+            keys = (
+                [card["key"] for card in participant.hand]
+                + list(participant.draw_pile)
+                + list(participant.discard_pile)
+            )
+            assert sorted(keys) == sorted(HERO_DECKS[participant.hero.key]), side
 
 
 def test_enemy_shield_persists_across_its_own_turns():
@@ -930,7 +933,7 @@ def assert_consistent(battle):
             + Counter(equipped)
         )
         # 攻击挂起时那张牌已经在弃牌区，装备则在槽里，任何时刻都应当正好是整副牌。
-        assert keys == Counter(FIXED_DECK_KEYS), (side, keys)
+        assert keys == Counter(HERO_DECKS[participant.hero.key]), (side, keys)
 
 
 def test_random_play_stays_consistent_through_both_sides_responses():

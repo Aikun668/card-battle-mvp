@@ -1,4 +1,6 @@
-from game.catalog import CARDS, EQUIP_SLOTS, FIXED_DECK_KEYS, HEROES
+from collections import Counter
+
+from game.catalog import CARDS, EQUIP_SLOTS, HERO_DECKS, HEROES
 
 
 def test_catalog_has_the_three_specified_heroes():
@@ -8,17 +10,49 @@ def test_catalog_has_the_three_specified_heroes():
     assert HEROES["ranger"].max_hp == 27
 
 
-def test_fixed_deck_includes_one_response_card_in_addition_to_the_mvp_deck():
-    assert len(FIXED_DECK_KEYS) == 15
-    assert FIXED_DECK_KEYS.count("slash") == 4
-    assert FIXED_DECK_KEYS.count("heavy_strike") == 2
-    assert FIXED_DECK_KEYS.count("shield") == 3
-    assert FIXED_DECK_KEYS.count("heal") == 2
-    assert FIXED_DECK_KEYS.count("fireball") == 1
-    assert FIXED_DECK_KEYS.count("dodge") == 1
-    assert FIXED_DECK_KEYS.count("longsword") == 1
-    assert FIXED_DECK_KEYS.count("iron_armor") == 1
-    assert {card.key for card in CARDS.values()} == set(FIXED_DECK_KEYS)
+def test_every_hero_has_a_fifteen_card_deck_drawn_from_the_catalog():
+    assert set(HERO_DECKS) == set(HEROES)
+    catalog_keys = {card.key for card in CARDS.values()}
+    for hero_key, deck in HERO_DECKS.items():
+        assert len(deck) == 15, hero_key
+        assert set(deck) <= catalog_keys, hero_key
+    # 每张定义过的牌都至少要有一副牌组在用，否则就是把废牌写进了公开牌表。
+    assert set().union(*HERO_DECKS.values()) == catalog_keys
+
+
+def test_hero_decks_are_the_agreed_archetypes():
+    assert Counter(HERO_DECKS["warrior"]) == Counter(
+        slash=6,
+        heavy_strike=3,
+        shield=2,
+        heal=1,
+        dodge=1,
+        longsword=1,
+        iron_armor=1,
+    )
+    assert Counter(HERO_DECKS["mage"]) == Counter(
+        fireball=3,
+        heavy_strike=3,
+        slash=4,
+        shield=2,
+        heal=1,
+        dodge=1,
+        iron_armor=1,
+    )
+    assert Counter(HERO_DECKS["ranger"]) == Counter(
+        slash=8,
+        heavy_strike=2,
+        shield=1,
+        heal=1,
+        dodge=2,
+        longsword=1,
+    )
+
+
+def test_equipment_cards_appear_at_most_once_per_deck():
+    for hero_key, deck in HERO_DECKS.items():
+        equipment = [key for key in deck if CARDS[key].effect_type == "equip"]
+        assert len(equipment) == len(set(equipment)), hero_key
 
 
 def test_equipment_cards_cost_one_energy_and_carry_their_bonus_value():

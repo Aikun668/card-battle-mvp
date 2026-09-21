@@ -13,7 +13,7 @@ from game.ai import (
     select_enemy_action,
 )
 from game.battle import BattleState
-from game.catalog import CARDS, CATALOG_KEYS, FIXED_DECK_KEYS, HEROES
+from game.catalog import CARDS, CATALOG_KEYS, HERO_DECKS, HEROES
 from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
@@ -433,14 +433,14 @@ def test_enemy_energy_starts_fresh_every_enemy_turn():
     assert battle.player.hp == 32 - 6
 
 
-def test_enemy_deck_is_the_same_fixed_deck_as_the_player():
+def test_enemy_deck_is_its_own_hero_deck():
     battle = make_battle()
     enemy_keys = (
         [card["key"] for card in battle.enemy_hand]
         + list(battle.enemy_draw_pile)
         + list(battle.enemy_discard_pile)
     )
-    assert sorted(enemy_keys) == sorted(FIXED_DECK_KEYS)
+    assert sorted(enemy_keys) == sorted(HERO_DECKS[battle.enemy_hero.key])
 
 
 def test_passing_a_response_resumes_the_remaining_enemy_actions():

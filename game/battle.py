@@ -11,7 +11,7 @@ from game.catalog import (
     CARDS,
     CATALOG_KEYS,
     EQUIP_SLOTS,
-    FIXED_DECK_KEYS,
+    HERO_DECKS,
     HEROES,
     LONGSWORD_BOOST_KEYS,
     SKILL_COST,
@@ -140,7 +140,7 @@ class BattleState:
                         name=hero.name, max_hp=hero.max_hp, hp=hero.max_hp
                     ),
                     hand=[],
-                    draw_pile=_shuffled_deck(rng, FIXED_DECK_KEYS),
+                    draw_pile=_shuffled_deck(rng, HERO_DECKS[hero.key]),
                     discard_pile=[],
                 ),
                 Side.ENEMY: ParticipantState(
@@ -151,7 +151,7 @@ class BattleState:
                         hp=enemy_hero.max_hp,
                     ),
                     hand=[],
-                    draw_pile=_shuffled_deck(rng, FIXED_DECK_KEYS),
+                    draw_pile=_shuffled_deck(rng, HERO_DECKS[enemy_hero.key]),
                     discard_pile=[],
                 ),
             },
