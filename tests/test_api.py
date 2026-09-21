@@ -144,22 +144,25 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     assert after_turn["player"]["energy"] == 3
 
 
-def test_api_end_turn_on_the_last_round_returns_a_draw_instead_of_an_error(tmp_path):
+def test_api_end_turn_on_the_last_round_returns_a_result_instead_of_an_error(tmp_path):
     client = make_client(tmp_path)
     client.post("/api/game", json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         battle = session["battle"]
-        # 让玩家当后手方：他结束回合就正好打满 10 回合，平局由这一步判定，
+        # 让玩家当后手方：他结束回合就正好打满 10 回合，收尾判定由这一步给出，
         # 后面没有电脑回合可跑，接口不该把它当成动作失败。
         battle["starting_side"] = "enemy"
         battle["round_number"] = ROUND_LIMIT
         battle["phase"] = "PLAYER_TURN"
+        # 电脑英雄是随机抽的，血线钉死才能确定性地走到“玩家血多获胜”这一支。
+        battle["participants"]["player"]["combatant"]["hp"] = 24
+        battle["participants"]["enemy"]["combatant"]["hp"] = 20
         session.modified = True
 
     response = client.post("/api/game/actions/end-turn")
 
     assert response.status_code == 200
-    assert response.get_json()["data"]["phase"] == "DRAW"
+    assert response.get_json()["data"]["phase"] == "VICTORY"
 
 
 def test_create_game_defaults_to_medium_ai_difficulty(tmp_path):

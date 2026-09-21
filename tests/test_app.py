@@ -236,15 +236,18 @@ def test_match_result_written_to_sqlite_exactly_once(tmp_path):
     assert count == 1
 
 
-def test_end_turn_on_the_last_round_shows_the_draw_result_without_a_flash(tmp_path):
+def test_end_turn_on_the_last_round_shows_the_result_without_a_flash(tmp_path):
     client = make_client(tmp_path)
     client.post("/demo/heroes", data={"hero_key": "warrior"})
     with client.session_transaction() as s:
-        # 让玩家当后手方：他结束回合就正好打满 10 回合，这一步直接判平局，
+        # 让玩家当后手方：他结束回合就正好打满 10 回合，收尾判定由这一步给出，
         # 后面没有电脑回合可跑，页面不该弹“本局已经结束”。
         s["battle"]["starting_side"] = "enemy"
         s["battle"]["round_number"] = ROUND_LIMIT
         s["battle"]["phase"] = "PLAYER_TURN"
+        # 电脑英雄是随机抽的，血线钉死才能确定性地走到“玩家血多获胜”这一支。
+        s["battle"]["participants"]["player"]["combatant"]["hp"] = 24
+        s["battle"]["participants"]["enemy"]["combatant"]["hp"] = 20
         s.modified = True
 
     r = client.post("/demo/battle/end-turn")
@@ -252,7 +255,7 @@ def test_end_turn_on_the_last_round_shows_the_draw_result_without_a_flash(tmp_pa
     assert r.status_code == 302
     assert r.headers["Location"].endswith("/demo/result")
     page = client.get("/demo/result").get_data(as_text=True)
-    assert "平局" in page
+    assert "胜利" in page
     assert "本局已经结束" not in page
 
 

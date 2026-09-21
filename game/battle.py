@@ -343,6 +343,24 @@ class BattleState:
         elif self.player.hp <= 0:
             self.phase = BattlePhase.DEFEAT
 
+    def _settle_round_limit(self) -> None:
+        """打满回合上限的收尾：血多者胜，血同看护盾，两者都同才算平局。"""
+        player_hp, enemy_hp = self.player.hp, self.enemy.hp
+        player_shield, enemy_shield = self.player.shield, self.enemy.shield
+        if player_hp != enemy_hp:
+            player_wins, reason = player_hp > enemy_hp, "生命值更高"
+        elif player_shield != enemy_shield:
+            player_wins, reason = player_shield > enemy_shield, "护盾更厚"
+        else:
+            self.phase = BattlePhase.DRAW
+            self.log.append(
+                f"达到 {ROUND_LIMIT} 回合上限，双方生命值与护盾相同，本局平局"
+            )
+            return
+        self.phase = BattlePhase.VICTORY if player_wins else BattlePhase.DEFEAT
+        winner = SIDE_LABEL[Side.PLAYER if player_wins else Side.ENEMY]
+        self.log.append(f"达到 {ROUND_LIMIT} 回合上限，{winner}{reason}，本局获胜")
+
     def current_side(self) -> Side | None:
         return SIDE_PHASE.get(self.phase)
 
@@ -364,8 +382,7 @@ class BattleState:
         starts_new_round = side is not self.starting_side
         is_game_opening = side is self.starting_side and self.round_number == 1
         if starts_new_round and self.round_number >= ROUND_LIMIT:
-            self.phase = BattlePhase.DRAW
-            self.log.append(f"达到 {ROUND_LIMIT} 回合上限，本局平局")
+            self._settle_round_limit()
             return ActionResult(True, "")
         next_side = OPPONENT_SIDE[side]
         if starts_new_round:

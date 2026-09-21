@@ -87,7 +87,7 @@ def create_demo_blueprint() -> Blueprint:
             flash(result.message)
             persist_battle(session, battle)
             return redirect(url_for("demo.battle_view"))
-        # 打满回合上限时玩家结束回合就直接判平局，没有电脑回合可跑。
+        # 打满回合上限时玩家结束回合就直接收尾判出胜负，没有电脑回合可跑。
         if battle.phase is BattlePhase.ENEMY_TURN:
             battle.resolve_enemy_turn()
         persist_battle(session, battle)

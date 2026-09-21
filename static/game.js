@@ -19,7 +19,7 @@ const phaseLabels = {
   RESPONSE: ["敌方攻击", "选择是否响应这次攻击"],
   VICTORY: ["胜利", "你赢下了这场对决"],
   DEFEAT: ["失败", "再调整一次出牌顺序"],
-  DRAW: ["平局", "回合上限已到，双方未分胜负"],
+  DRAW: ["平局", "回合上限已到，双方生命值与护盾都相同"],
 };
 
 const outcomeLabels = {

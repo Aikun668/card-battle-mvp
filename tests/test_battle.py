@@ -20,6 +20,16 @@ def withhold_enemy_skill(battle):
     return battle
 
 
+def run_out_the_round_limit(battle):
+    """把这一局推到第 10 回合上限的收尾判定：玩家空手结束回合，电脑空手过牌。"""
+    battle.round_number = ROUND_LIMIT
+    battle.hand = []
+    battle.end_player_turn()
+    battle.enemy_hand = []
+    withhold_enemy_skill(battle)
+    battle.resolve_enemy_turn()
+
+
 def test_new_battle_has_five_cards_three_energy_and_player_turn():
     battle = make_battle()
     assert battle.phase is BattlePhase.PLAYER_TURN
@@ -164,6 +174,9 @@ def test_round_limit_lets_each_side_act_ten_times():
         battle = BattleState.create(
             "warrior", random.Random(7), starting_side=first_side
         )
+        # 双方血量拉平，收尾判定才会落到“真平局”那一支，这条用例只管回合数。
+        battle.player.hp = 20
+        battle.enemy.hp = 20
         # 电脑先手时 create() 已经替它跑完第一个回合。
         turns = {Side.PLAYER: 0, Side.ENEMY: 1 if first_side is Side.ENEMY else 0}
         for _ in range(4 * ROUND_LIMIT):
@@ -296,13 +309,46 @@ def test_draw_pile_empty_with_no_discard_draws_nothing():
     assert drawn == 0
 
 
-def test_round_ten_ends_in_draw():
+def test_round_ten_hands_the_win_to_the_side_with_more_health():
     battle = make_battle()
-    battle.round_number = 10
-    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
-    battle.end_player_turn()
-    battle.resolve_enemy_turn()
-    assert battle.phase.value == "DRAW"
+    battle.player.hp = 24
+    battle.enemy.hp = 20
+    run_out_the_round_limit(battle)
+    assert battle.phase is BattlePhase.VICTORY
+
+
+def test_round_ten_hands_the_loss_to_the_side_with_less_health():
+    battle = make_battle()
+    battle.player.hp = 18
+    battle.enemy.hp = 20
+    run_out_the_round_limit(battle)
+    assert battle.phase is BattlePhase.DEFEAT
+
+
+def test_round_ten_breaks_equal_health_by_remaining_shield():
+    battle = make_battle()
+    battle.player.hp = 20
+    battle.enemy.hp = 20
+    battle.player.shield = 6
+    run_out_the_round_limit(battle)
+    assert battle.phase is BattlePhase.VICTORY
+
+
+def test_round_ten_hands_the_loss_to_the_thinner_shield():
+    battle = make_battle()
+    battle.player.hp = 20
+    battle.enemy.hp = 20
+    battle.enemy.shield = 6
+    run_out_the_round_limit(battle)
+    assert battle.phase is BattlePhase.DEFEAT
+
+
+def test_round_ten_stays_a_draw_when_health_and_shield_both_match():
+    battle = make_battle()
+    battle.player.hp = 20
+    battle.enemy.hp = 20
+    run_out_the_round_limit(battle)
+    assert battle.phase is BattlePhase.DRAW
     assert battle.is_finished()
 
 
