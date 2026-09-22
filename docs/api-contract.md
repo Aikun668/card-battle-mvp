@@ -62,7 +62,7 @@ POST /api/game
 
 `ai_difficulty` 可选值为 `easy`、`medium`、`hard`，省略时为 `medium`。它只改变电脑的决策质量与随机性，不改变卡牌数值、生命值、能量或抽牌规则。非法取值返回 `INVALID_DIFFICULTY`。
 
-创建对局时先手由服务端 RNG 随机决定。电脑先手时，它开局的整个回合已经在创建流程里跑完，所以 `POST /api/game` 只会返回 `PLAYER_TURN` 或终局，永远不会返回 `ENEMY_TURN` 或 `RESPONSE`。
+创建对局时先手由服务端 RNG 随机决定。电脑先手时，它开局的回合在创建流程里跑到"需要玩家决定的点"为止：`POST /api/game` 返回 `PLAYER_TURN`（回合已跑完）、`RESPONSE`（有攻击等玩家响应，`response.active` 为 `true`）或终局，永远不会返回 `ENEMY_TURN`。玩家在 `RESPONSE` 下用现有的 `POST /api/game/actions/respond` 响应（`dodge` 或 `pass`）；响应后电脑会继续把回合跑完，最终回到 `PLAYER_TURN`。
 
 成功的对局接口返回：
 
