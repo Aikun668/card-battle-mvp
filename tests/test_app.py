@@ -151,8 +151,8 @@ def test_demo_battle_page_can_answer_an_enemy_attack(tmp_path):
         player = side_state(session, "player")
         assert session["battle"]["phase"] == "PLAYER_TURN"
         # 闪避牌打出后进了弃牌堆，回合交回玩家时补一张牌、能量重新回满。
-        assert all(card["key"] != "dodge" for card in player["hand"])
-        assert player["discard_pile"] == ["dodge"]
+        # （补的那张可能是牌组里另一张闪避，不能用"手里没有闪避"来断言。）
+        assert "dodge" in player["discard_pile"]
         assert player["combatant"]["energy"] == 3
         assert any("抵消了本次伤害" in entry for entry in session["battle"]["log"])
 
@@ -219,6 +219,10 @@ def test_match_result_written_to_sqlite_exactly_once(tmp_path):
     client = make_client(tmp_path)
     client.post("/demo/heroes", data={"hero_key": "warrior"})
     with client.session_transaction() as s:
+        # 创建时电脑先手可能停在响应窗口；本用例只验证"击杀写库恰好一次"。
+        s["battle"]["phase"] = "PLAYER_TURN"
+        s["battle"]["starting_side"] = "player"
+        s["battle"]["pending_attack"] = None
         enemy = side_state(s, "enemy")
         enemy["combatant"]["hp"] = 1
         enemy["combatant"]["shield"] = 0

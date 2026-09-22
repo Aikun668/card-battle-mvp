@@ -169,11 +169,10 @@ class BattleState:
         for side in (Side.PLAYER, Side.ENEMY):
             state.draw_cards_for(side, STARTING_HAND)
         if first_side is Side.ENEMY:
-            # 电脑先手时在创建流程里同步跑完，调用方只需要处理玩家回合或终局；
-            # 开局这一次攻击发生在玩家看到棋盘之前，按放弃响应结算。
+            # 电脑先手时在创建流程里把它这一回合推到"需要玩家决定的点"为止：
+            # 要么回合跑完（返回玩家回合），要么停在响应窗口等调用方转交玩家。
+            # 响应是玩家自己的决定，创建流程绝不替他放弃。
             state.resolve_enemy_turn()
-            while state.phase is BattlePhase.RESPONSE:
-                state.respond("pass")
         return state
 
     def _new_card_id(self) -> str:

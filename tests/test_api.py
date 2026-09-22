@@ -54,6 +54,22 @@ def pin_enemy_warrior(session: dict) -> None:
     enemy["combatant"]["hp"] = hero.max_hp
 
 
+def start_player_turn_battle(client, json):
+    """创建对局并把状态推进到玩家回合（测试脚手架）。
+
+    电脑先手的开局回合可能停在响应窗口等玩家决定；这里替测试放弃响应，
+    返回已经交回玩家回合的状态。专门验证创建契约本身的用例不要用它。
+    """
+    response = client.post("/api/game", json=json)
+    data = response.get_json()["data"]
+    guard = 0
+    while data and data["phase"] == "RESPONSE" and guard < 6:
+        response = client.post("/api/game/actions/respond", json={"action": "pass"})
+        data = response.get_json()["data"]
+        guard += 1
+    return response
+
+
 def test_root_is_backend_health_metadata_and_demo_is_explicit(tmp_path):
     client = make_client(tmp_path)
 
@@ -99,7 +115,8 @@ def test_create_game_returns_public_state_without_hidden_deck_data(tmp_path):
     payload = response.get_json()
     assert payload["ok"] is True
     state = payload["data"]
-    assert state["phase"] == "PLAYER_TURN"
+    # 电脑先手时创建可能停在响应窗口——那也是"等玩家决定"的合法状态。
+    assert state["phase"] in ("PLAYER_TURN", "RESPONSE")
     assert state["round_number"] == 1
     assert state["player"]["energy"] == 3
     assert len(state["player"]["hand"]) == 5
@@ -111,11 +128,13 @@ def test_create_game_returns_public_state_without_hidden_deck_data(tmp_path):
 
 def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         side_state(session, "player")["hand"] = [{"id": "player-slash", "key": "slash"}]
-        # 电脑先手时可能已经给自己叠了护盾，护盾现在会跨回合保留，先清零才好验证伤害。
-        side_state(session, "enemy")["combatant"]["shield"] = 0
+        # 电脑先手时可能已经给自己叠了护盾、装上铁甲，先清掉才好验证伤害。
+        enemy = side_state(session, "enemy")
+        enemy["combatant"]["shield"] = 0
+        enemy["armor"] = None
         drop_enemy_dodge(session)
         session.modified = True
     state = client.get("/api/game").get_json()["data"]
@@ -146,7 +165,7 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
 
 def test_api_end_turn_on_the_last_round_returns_a_result_instead_of_an_error(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         battle = session["battle"]
         # 让玩家当后手方：他结束回合就正好打满 10 回合，收尾判定由这一步给出，
@@ -200,7 +219,7 @@ def test_create_game_rejects_an_unknown_ai_difficulty(tmp_path):
 
 def test_ai_difficulty_survives_reads_and_enemy_turns(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior", "ai_difficulty": "easy"})
+    start_player_turn_battle(client, json={"hero_key": "warrior", "ai_difficulty": "easy"})
 
     assert client.get("/api/game").get_json()["data"]["ai_difficulty"] == "easy"
 
@@ -210,7 +229,7 @@ def test_ai_difficulty_survives_reads_and_enemy_turns(tmp_path):
 
 def test_public_state_publishes_the_enemy_intent_during_the_player_turn(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
 
     state = client.get("/api/game").get_json()["data"]
 
@@ -224,7 +243,7 @@ def test_public_state_publishes_the_enemy_intent_during_the_player_turn(tmp_path
 
 def test_enemy_intent_is_deterministic_across_reads(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
 
     first = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
     second = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
@@ -234,7 +253,7 @@ def test_enemy_intent_is_deterministic_across_reads(tmp_path):
 
 def test_enemy_intent_is_null_outside_the_player_turn(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         session["battle"]["phase"] = "VICTORY"
         session.modified = True
@@ -246,7 +265,7 @@ def test_enemy_intent_is_null_outside_the_player_turn(tmp_path):
 
 def test_enemy_intent_points_at_something_the_enemy_actually_has(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         enemy = side_state(session, "enemy")
         hand_names = {CARDS[card["key"]].name for card in enemy["hand"]}
@@ -262,7 +281,7 @@ def test_enemy_intent_points_at_something_the_enemy_actually_has(tmp_path):
 
 def test_enemy_intent_does_not_leak_the_hidden_hand(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     before = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
     with client.session_transaction() as session:
         side_state(session, "player")["hand"] = [{"id": "hidden", "key": "fireball"}]
@@ -288,7 +307,7 @@ def test_catalog_marks_exhaust_cards(tmp_path):
 
 def test_public_state_publishes_the_exhaust_pile(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
 
     state = client.get("/api/game").get_json()["data"]
 
@@ -309,7 +328,7 @@ def test_api_rejects_actions_without_a_live_game(tmp_path):
 
 def test_api_action_error_keeps_state_in_response(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     before = client.get("/api/game").get_json()["data"]
 
     response = client.post("/api/game/actions/card", json={"card_id": "not-in-hand"})
@@ -324,7 +343,7 @@ def test_api_action_error_keeps_state_in_response(tmp_path):
 
 def test_api_restart_clears_the_current_game(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
 
     response = client.post("/api/game/restart")
 
@@ -335,7 +354,7 @@ def test_api_restart_clears_the_current_game(tmp_path):
 
 def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         player = side_state(session, "player")
         player["combatant"]["energy"] = 2
@@ -378,7 +397,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
 
 def test_api_can_pass_enemy_attack_response(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior"})
+    start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
         player = side_state(session, "player")
         player["combatant"]["energy"] = 1
@@ -511,7 +530,17 @@ def test_create_game_never_hands_back_a_mid_enemy_turn(tmp_path):
 
         assert response.status_code == 201
         state = response.get_json()["data"]
-        assert state["phase"] in {"PLAYER_TURN", "VICTORY", "DEFEAT", "DRAW"}
+        # 电脑先手的开局回合在创建流程里推到"需要玩家决定的点"为止：
+        # 玩家回合、响应窗口（等玩家响应）或终局；绝不把电脑回合留在外面。
+        assert state["phase"] in {
+            "PLAYER_TURN",
+            "RESPONSE",
+            "VICTORY",
+            "DEFEAT",
+            "DRAW",
+        }
+        if state["phase"] == "RESPONSE":
+            assert state["response"]["active"] is True
         first_movers.add(state["starting_side"])
 
     assert first_movers == {"player", "enemy"}
@@ -519,7 +548,7 @@ def test_create_game_never_hands_back_a_mid_enemy_turn(tmp_path):
 
 def test_public_state_keeps_both_sides_resources_across_refreshes(tmp_path):
     client = make_client(tmp_path)
-    client.post("/api/game", json={"hero_key": "warrior", "ai_difficulty": "hard"})
+    start_player_turn_battle(client, json={"hero_key": "warrior", "ai_difficulty": "hard"})
     with client.session_transaction() as session:
         player = side_state(session, "player")
         player["combatant"]["energy"] = 2

@@ -89,25 +89,63 @@ def test_starting_side_is_drawn_from_the_rng_for_both_sides():
     assert sides == {Side.PLAYER, Side.ENEMY}
 
 
-def test_created_battle_never_leaves_the_enemy_turn_pending():
+def test_created_battle_stops_at_a_player_decision():
+    """创建后只能停在三种状态：玩家回合、响应窗口（等玩家决定）、终局。
+
+    绝不把 ENEMY_TURN 留在外面，也绝不替玩家把响应窗口放弃掉。
+    """
     for seed in range(20):
         battle = BattleState.create("warrior", random.Random(seed))
         assert battle.phase in (
             BattlePhase.PLAYER_TURN,
+            BattlePhase.RESPONSE,
             BattlePhase.VICTORY,
             BattlePhase.DEFEAT,
         )
+        if battle.phase is BattlePhase.RESPONSE:
+            assert battle.pending_attack is not None
+            assert battle.pending_attack.defender is Side.PLAYER
 
 
 def test_starting_side_can_hand_the_first_turn_to_the_enemy():
     battle = BattleState.create("warrior", random.Random(7), starting_side=Side.ENEMY)
     assert battle.starting_side is Side.ENEMY
-    # 电脑先手时，创建流程会同步跑完它这一回合，再把行动权交回玩家。
-    assert any(entry.startswith("电脑使用") for entry in battle.log)
-    assert battle.phase is BattlePhase.PLAYER_TURN
+    # 电脑先手时，创建流程把它这一回合推到需要玩家决定的点为止：
+    # 要么回合已经跑完（玩家回合），要么停在响应窗口等玩家响应。
+    assert battle.phase in (BattlePhase.PLAYER_TURN, BattlePhase.RESPONSE)
+    if battle.phase is BattlePhase.PLAYER_TURN:
+        assert any(
+            entry.startswith(("电脑使用", "电脑释放技能")) for entry in battle.log
+        )
+    else:
+        assert battle.pending_attack is not None
     assert battle.round_number == 1
     assert battle.player.energy == 3
     assert len(battle.hand) == 5
+
+
+def test_enemy_opening_response_window_is_left_to_the_player():
+    """电脑先手的开局攻击挂在响应窗口上，玩家响应后电脑继续跑完回合。"""
+    for seed in range(200):
+        battle = BattleState.create(
+            "warrior", random.Random(seed), starting_side=Side.ENEMY
+        )
+        if battle.phase is not BattlePhase.RESPONSE:
+            continue
+        pending = battle.pending_attack
+        assert pending is not None
+        assert pending.defender is Side.PLAYER
+        # 创建流程没有替玩家结算：回答之后电脑接着把余下的行动跑完。
+        # 它一回合可以打出多张攻击，所以响应窗口可能连续出现。
+        guard = 0
+        while battle.phase is BattlePhase.RESPONSE and guard < 6:
+            assert battle.respond("pass").ok is True
+            guard += 1
+        assert battle.phase is BattlePhase.PLAYER_TURN
+        assert battle.round_number == 1
+        assert battle.player.energy == 3
+        return
+    raise AssertionError("200 个种子里没有出现电脑先手且停在响应窗口的开局")
 
 
 def test_each_side_shuffles_its_own_hero_deck():

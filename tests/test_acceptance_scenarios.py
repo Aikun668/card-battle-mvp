@@ -55,27 +55,41 @@ def test_acceptance_walk_through():
     with client.session_transaction() as s:
         player = side_state(s, "player")
         enemy = side_state(s, "enemy")
-        # 先手方由 RNG 决定；电脑先手时它的第一个回合已经在创建流程里跑完，
-        # 页面直接进入玩家回合，玩家不会看到等待电脑行动的中转状态。
-        assert s["battle"]["phase"] == "PLAYER_TURN"
+        # 先手方由 RNG 决定；电脑先手时它的第一个回合在创建流程里推到
+        # 需要玩家决定的点为止：玩家回合，或停在响应窗口等玩家响应。
+        assert s["battle"]["phase"] in ("PLAYER_TURN", "RESPONSE")
         assert s["battle"]["starting_side"] in ("player", "enemy")
         if s["battle"]["starting_side"] == "enemy":
-            # 电脑先手时开局那一手可能是普通牌，也可能是英雄技能。
-            assert any(
-                e.startswith(("电脑使用", "电脑释放技能")) for e in s["battle"]["log"]
-            )
+            if s["battle"]["phase"] == "RESPONSE":
+                assert s["battle"]["pending_attack"]["defender"] == "player"
+            else:
+                # 电脑先手时开局那一手可能是普通牌，也可能是英雄技能。
+                assert any(
+                    e.startswith(("电脑使用", "电脑释放技能"))
+                    for e in s["battle"]["log"]
+                )
         assert 0 < player["combatant"]["hp"] <= player["combatant"]["max_hp"]
         assert enemy["hero_key"] in HEROES
         assert enemy["combatant"]["hp"] == enemy["combatant"]["max_hp"]
         assert player["combatant"]["energy"] == 3
         assert len(player["hand"]) == 5
 
+    # 停在响应窗口时逐次放弃，把行动权交回玩家（场景 4 需要玩家回合）。
+    # 电脑一个回合可能打出多张攻击，响应窗口会连续出现。
+    for _ in range(5):
+        with client.session_transaction() as s:
+            response_pending = s["battle"]["phase"] == "RESPONSE"
+        if not response_pending:
+            break
+        client.post("/demo/battle/respond", data={"action": "pass"})
+
     # Scenario 4 — normal card play
     with client.session_transaction() as s:
         side_state(s, "player")["hand"] = [{"id": "p-s", "key": "slash"}]
         enemy = side_state(s, "enemy")
-        # 电脑先手时可能已经叠过护盾，护盾现在跨回合保留，先清零才能验证伤害。
+        # 电脑先手时可能已经叠过护盾、装上铁甲，先清掉才能验证伤害。
         enemy["combatant"]["shield"] = 0
+        enemy["armor"] = None
         drop_enemy_dodge(s)
         enemy_hp_before = enemy["combatant"]["hp"]
         s.modified = True
