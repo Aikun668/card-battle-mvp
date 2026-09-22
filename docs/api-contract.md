@@ -94,11 +94,13 @@ POST /api/game
           "name": "长剑",
           "cost": 1,
           "effect_type": "equip",
-          "value": 2
+          "value": 2,
+          "exhaust": false
         },
         "armor": null
       },
       "bonus_energy_next_turn": 0,
+      "exhaust_pile": [],
       "hand": []
     },
     "enemy": {
@@ -120,6 +122,7 @@ POST /api/game
         "armor": null
       },
       "bonus_energy_next_turn": 0,
+      "exhaust_pile": [],
       "intent": {
         "kind": "attack",
         "source": "card",
@@ -172,6 +175,12 @@ POST /api/game
 - 装备是挂在角色身上、对面也看得见的信息，所以两边对称输出；手牌仍然只有玩家自己有。
 
 装备不需要任何新路由：`POST /api/game/actions/card` 照常接受装备牌的 `card_id`，成功后就地更新 `equipment`，同一次响应里就能看到槽位变化。装备牌不进入弃牌堆，所以它不会出现在任何取牌区的接口数据里。
+
+### 消耗与移除区
+
+- 卡牌定义（`/api/cards` 与公开状态里的卡牌）带 `exhaust` 布尔：`true` 表示打出后从本局移除（不进弃牌堆、洗牌也回不来）；
+- 双方参与者带 `exhaust_pile`：已移除的牌（公开信息——打出去就没了的东西，对面也算得清）；
+- 装备槽里的卡牌定义同样带 `exhaust`（当前装备牌都是 `false`）。
 
 ## 错误格式
 
