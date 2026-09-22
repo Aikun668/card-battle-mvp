@@ -1282,7 +1282,7 @@ def test_intent_maps_hero_skills():
         "defend",
         "skill",
         "守护",
-        8,
+        7,
     )
 
 

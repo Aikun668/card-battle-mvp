@@ -14,7 +14,7 @@ from game.catalog import (
 def test_catalog_has_the_three_specified_heroes():
     assert set(HEROES) == {"warrior", "mage", "ranger"}
     assert HEROES["warrior"].max_hp == 32
-    assert HEROES["mage"].max_hp == 24
+    assert HEROES["mage"].max_hp == 28
     assert HEROES["ranger"].max_hp == 27
 
 

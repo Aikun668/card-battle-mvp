@@ -4,8 +4,8 @@ STARTING_ENERGY = 3
 SKILL_COST = 2
 
 HEROES: dict[str, HeroDefinition] = {
-    "warrior": HeroDefinition("warrior", "战士", 32, "守护", "shield", 8),
-    "mage": HeroDefinition("mage", "法师", 24, "火球术", "damage", 10),
+    "warrior": HeroDefinition("warrior", "战士", 32, "守护", "shield", 7),
+    "mage": HeroDefinition("mage", "法师", 28, "火球术", "damage", 10),
     "ranger": HeroDefinition("ranger", "游侠", 27, "连射", "damage_draw", 6),
 }
 

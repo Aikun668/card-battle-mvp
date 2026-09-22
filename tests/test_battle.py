@@ -241,7 +241,7 @@ def test_skill_can_only_be_used_once_per_player_turn():
     first = battle.use_skill()
     second = battle.use_skill()
     assert first.ok is True
-    assert battle.player.shield == 8
+    assert battle.player.shield == 7
     assert second.ok is False
     assert second.message == "本回合技能已经使用过"
 
@@ -560,7 +560,7 @@ def test_enemy_warrior_skill_shields_instead_of_attacking():
 
     battle.resolve_enemy_turn()
 
-    assert battle.enemy.shield == 8
+    assert battle.enemy.shield == 7
     assert battle.player.hp == battle.player.max_hp
 
 
