@@ -6,7 +6,9 @@ from game.ai import (
     AIObservation,
     PublicParticipantState,
     _after_action,
+    _effective_damage,
     _intent_from_candidate,
+    _next_turn_observation,
     _tactical_score,
     choose_enemy_response,
     estimate_enemy_intent,
@@ -840,6 +842,7 @@ def test_the_observation_types_have_nowhere_to_put_the_opponent_hand_or_deck():
         "armor_key",
         "weapon_used_this_turn",
         "armor_used_this_turn",
+        "bonus_energy_next_turn",
     }
     assert {field.name for field in fields(AIObservation)} == {
         "self_state",
@@ -1334,3 +1337,110 @@ def test_intent_is_deterministic_and_does_not_touch_the_battle():
 
     assert first == second
     assert battle.to_dict() == before
+
+
+# --- 条件牌：AI 估值 ---
+
+
+def test_armor_break_is_the_better_choice_against_shields():
+    def scores(shield):
+        battle = make_battle()
+        battle.enemy.energy = 1
+        battle.player.shield = shield
+        battle.enemy_hand = [
+            {"id": "enemy-break", "key": "armor_break"},
+            {"id": "enemy-slash", "key": "slash"},
+        ]
+        return enemy_scores(battle)
+
+    bare = scores(0)
+    shielded = scores(6)
+
+    # 无盾时破甲是劣质斩击（4 伤打不满）；有盾时它反超，成为更优的一刀。
+    assert bare["enemy-break"] < bare["enemy-slash"]
+    assert shielded["enemy-break"] > shielded["enemy-slash"]
+
+
+def test_execute_scores_higher_inside_the_wounded_zone():
+    def score(target_hp):
+        battle = make_battle()
+        battle.enemy.energy = 2
+        battle.player.max_hp = 24
+        battle.player.hp = target_hp
+        battle.enemy_hand = [{"id": "enemy-execute", "key": "execute"}]
+        return enemy_scores(battle)["enemy-execute"]
+
+    # 24 点上限的 30% 线是 7.2：7 点触发斩杀、8 点不触发。
+    assert score(7) > score(8)
+
+
+def test_charge_is_a_candidate_with_a_positive_score():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-charge", "key": "charge"}]
+
+    scores = enemy_scores(battle)
+
+    assert scores["enemy-charge"] > 0
+    assert (
+        rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)[0].card_id
+        == "enemy-charge"
+    )
+
+
+def test_charge_does_not_join_the_damage_plan():
+    """蓄力是投资牌：分数就是战术分，不该借伤害连招的价值刷分。"""
+    battle = make_battle()
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-charge", "key": "charge"},
+        {"id": "enemy-heavy", "key": "heavy_strike"},
+    ]
+    observation = battle.enemy_observation()
+    charge = next(
+        c
+        for c in get_available_enemy_actions(observation)
+        if c.card_id == "enemy-charge"
+    )
+
+    score = enemy_scores(battle)["enemy-charge"]
+
+    assert score == _tactical_score(observation, charge, AIDifficulty.HARD)
+
+
+def test_next_turn_preview_banks_the_charge_energy():
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy.energy = 0
+    battle.participant(Side.ENEMY).bonus_energy_next_turn = 2
+
+    preview = _next_turn_observation(battle.enemy_observation())
+
+    assert preview.self_state.energy == 3 + 2
+    assert preview.self_state.bonus_energy_next_turn == 0
+
+
+def test_intent_reports_conditional_damage():
+    battle = battle_with_enemy_hero("warrior")
+    battle.enemy.energy = 0
+    battle.player.max_hp = 24
+    battle.player.hp = 7
+    battle.enemy_hand = [{"id": "enemy-execute", "key": "execute"}]
+
+    intent = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+    # 报告的是条件生效后的伤害：处决在斩杀区是 12，不是基础 6。
+    assert (intent.kind, intent.name, intent.value) == ("attack", "处决", 12)
+
+
+def test_ai_estimated_damage_matches_the_settlement():
+    """AI 估值与真实结算走同一个条件伤害入口：两边必须逐字相等。"""
+    battle = make_battle()
+    battle.player.shield = 6
+    battle.player.max_hp = 24
+    battle.player.hp = 7
+
+    for key in ("slash", "heavy_strike", "armor_break", "execute"):
+        definition = CARDS[key]
+        assert _effective_damage(
+            battle.enemy_observation(), definition
+        ) == battle._attack_damage(Side.ENEMY, definition)

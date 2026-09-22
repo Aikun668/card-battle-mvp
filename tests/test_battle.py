@@ -957,6 +957,111 @@ def test_dodging_an_attack_does_not_spend_the_armor():
     assert battle.participant(Side.PLAYER).armor_used_this_turn is False
 
 
+# --- 条件牌：破甲 / 蓄力 / 处决 ---
+
+
+def test_armor_break_hits_harder_when_the_target_has_shield():
+    bare = make_battle()
+    bare.enemy_hand = []
+    bare.hand = [{"id": "player-break", "key": "armor_break"}]
+    bare.enemy.shield = 0
+    bare.enemy.hp = 20
+
+    bare.play_card("player-break")
+
+    assert bare.enemy.hp == 20 - 4
+
+    shielded = make_battle()
+    shielded.enemy_hand = []
+    shielded.hand = [{"id": "player-break", "key": "armor_break"}]
+    shielded.enemy.shield = 6
+    shielded.enemy.hp = 20
+
+    shielded.play_card("player-break")
+
+    # 8 点伤害：先削掉 6 点护盾，剩下 2 点落在生命上。
+    assert shielded.enemy.shield == 0
+    assert shielded.enemy.hp == 18
+
+
+def test_execute_doubles_only_below_the_wounded_line():
+    healthy = make_battle()
+    healthy.enemy_hand = []
+    healthy.enemy.max_hp = 24
+    healthy.enemy.hp = 8  # 33%：没到斩杀线
+    healthy.hand = [{"id": "player-execute", "key": "execute"}]
+
+    healthy.play_card("player-execute")
+
+    assert healthy.enemy.hp == 2
+
+    wounded = make_battle()
+    wounded.enemy_hand = []
+    wounded.enemy.max_hp = 24
+    wounded.enemy.hp = 7  # 29%：翻倍
+    wounded.hand = [{"id": "player-execute", "key": "execute"}]
+
+    wounded.play_card("player-execute")
+
+    assert wounded.enemy.hp == 0  # 12 点伤害打在 7 点生命上
+
+
+def test_charge_banks_energy_for_the_next_turn():
+    battle = make_battle()
+    battle.enemy_hand = []
+    battle.hand = [{"id": "player-charge", "key": "charge"}]
+
+    battle.play_card("player-charge")
+
+    assert battle.player.energy == 2  # 花掉 1 点
+    assert battle.participant(Side.PLAYER).bonus_energy_next_turn == 2
+
+    battle.end_player_turn()
+    battle.enemy_hand = []
+    withhold_enemy_skill(battle)
+    battle.resolve_enemy_turn()
+
+    # 下一回合：3 + 2 = 5 点能量；加成一次性用掉，不重复生效。
+    assert battle.phase is BattlePhase.PLAYER_TURN
+    assert battle.player.energy == 5
+    assert battle.participant(Side.PLAYER).bonus_energy_next_turn == 0
+
+
+def test_charge_stacks_and_writes_a_log_line():
+    battle = make_battle()
+    battle.enemy_hand = []
+    battle.hand = [
+        {"id": "player-charge-1", "key": "charge"},
+        {"id": "player-charge-2", "key": "charge"},
+    ]
+
+    battle.play_card("player-charge-1")
+    battle.play_card("player-charge-2")
+
+    assert battle.participant(Side.PLAYER).bonus_energy_next_turn == 4
+    assert any("蓄力" in entry for entry in battle.log)
+
+
+def test_charge_bonus_survives_a_save_load_round_trip():
+    battle = make_battle()
+    battle.participant(Side.PLAYER).bonus_energy_next_turn = 2
+
+    restored = BattleState.from_dict(battle.to_dict())
+
+    assert restored.participant(Side.PLAYER).bonus_energy_next_turn == 2
+
+
+def test_participant_payload_without_the_charge_field_reads_as_zero():
+    payload = make_battle().to_dict()
+    for side_key in ("player", "enemy"):
+        payload["participants"][side_key].pop("bonus_energy_next_turn")
+
+    restored = BattleState.from_dict(payload)
+
+    for side in (Side.PLAYER, Side.ENEMY):
+        assert restored.participant(side).bonus_energy_next_turn == 0
+
+
 def assert_consistent(battle):
     """响应窗口只在有待响应攻击时存在；能量不为负；双方四个牌区守恒。"""
     pending = battle.pending_attack

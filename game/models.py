@@ -72,6 +72,8 @@ class ParticipantState:
     armor: CardDefinition | None = None
     weapon_used_this_turn: bool = False
     armor_used_this_turn: bool = False
+    # 蓄力结余：下个自己的回合开始时额外获得的能量，结算后清零。
+    bonus_energy_next_turn: int = 0
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from game.catalog import (
     LONGSWORD_BOOST_KEYS,
     SKILL_COST,
     STARTING_ENERGY,
+    conditional_damage,
 )
 from game.models import (
     AIDifficulty,
@@ -253,11 +254,15 @@ class BattleState:
         if definition.effect_type == "damage":
             # 费用与弃牌在挂起前就结清，响应窗口里只决定这次伤害落不落地。
             return self._open_response(side, definition)
-        self._apply_card_effect(
-            definition,
-            source=participant.combatant,
-            target=self.opponent_of(side).combatant,
-        )
+        if definition.effect_type == "charge":
+            # 蓄力没有即时效果：把能量记到下个自己的回合。
+            participant.bonus_energy_next_turn += definition.value
+        else:
+            self._apply_card_effect(
+                definition,
+                source=participant.combatant,
+                target=self.opponent_of(side).combatant,
+            )
         self.log.append(self._format_card_log(side, definition))
         self._check_terminal()
         return ActionResult(True, "")
@@ -294,6 +299,11 @@ class BattleState:
             return f"{actor}使用【{definition.name}】，获得 {definition.value} 点护盾"
         if definition.effect_type == "heal":
             return f"{actor}使用【{definition.name}】，恢复 {definition.value} 点生命值"
+        if definition.effect_type == "charge":
+            return (
+                f"{actor}使用【{definition.name}】，"
+                f"下回合获得 {definition.value} 点额外能量"
+            )
         return f"{actor}使用【{definition.name}】"
 
     def use_skill_for(self, side: Side) -> ActionResult:
@@ -365,12 +375,15 @@ class BattleState:
         return SIDE_PHASE.get(self.phase)
 
     def start_turn(self, side: Side, *, initial: bool = False) -> None:
-        """回合开始：回满能量、重置技能与装备的本回合次数；首回合不额外补牌。"""
+        """回合开始：回满能量并结算蓄力结余、重置技能与装备次数；首回合不额外补牌。"""
         participant = self.participant(side)
         participant.skill_used_this_turn = False
         participant.weapon_used_this_turn = False
         participant.armor_used_this_turn = False
-        participant.combatant.energy = STARTING_ENERGY
+        participant.combatant.energy = (
+            STARTING_ENERGY + participant.bonus_energy_next_turn
+        )
+        participant.bonus_energy_next_turn = 0
         if not initial:
             self.draw_cards_for(side, 1)
 
@@ -508,8 +521,16 @@ class BattleState:
         return self._finish_response()
 
     def _attack_damage(self, attacker: Side, definition: CardDefinition) -> int:
-        """长剑只强化斩击，每次自己回合加一次；打出的瞬间就算进这一击。"""
+        """打出的瞬间结清这一击的全部加成：条件伤害与长剑，一起算进伤害值。"""
         participant = self.participant(attacker)
+        defender = self.opponent_of(attacker).combatant
+        damage = conditional_damage(
+            definition.value,
+            definition.key,
+            target_shield=defender.shield,
+            target_hp=defender.hp,
+            target_max_hp=defender.max_hp,
+        )
         weapon = participant.weapon
         boosted = (
             weapon is not None
@@ -517,9 +538,9 @@ class BattleState:
             and definition.key in LONGSWORD_BOOST_KEYS
         )
         if not boosted:
-            return definition.value
+            return damage
         participant.weapon_used_this_turn = True
-        return definition.value + weapon.value
+        return damage + weapon.value
 
     def _deal_damage(self, defender: Side, damage: int) -> int:
         """对角色造成伤害的唯一漏斗：铁甲先减伤，再交给护盾与血量。
@@ -640,6 +661,7 @@ def _public_participant(participant: ParticipantState) -> PublicParticipantState
         armor_key=participant.armor.key if participant.armor else None,
         weapon_used_this_turn=participant.weapon_used_this_turn,
         armor_used_this_turn=participant.armor_used_this_turn,
+        bonus_energy_next_turn=participant.bonus_energy_next_turn,
     )
 
 
@@ -665,6 +687,7 @@ def _participant_to_payload(participant: ParticipantState) -> dict:
         "armor": participant.armor.key if participant.armor else None,
         "weapon_used_this_turn": participant.weapon_used_this_turn,
         "armor_used_this_turn": participant.armor_used_this_turn,
+        "bonus_energy_next_turn": participant.bonus_energy_next_turn,
     }
 
 
@@ -716,6 +739,8 @@ def _participant_from_payload(payload: dict) -> ParticipantState:
         armor=_equipped_card_from_payload(payload.get("armor")),
         weapon_used_this_turn=bool(payload.get("weapon_used_this_turn", False)),
         armor_used_this_turn=bool(payload.get("armor_used_this_turn", False)),
+        # 本次改动之前保存的对局没有蓄力字段，读出 0。
+        bonus_energy_next_turn=int(payload.get("bonus_energy_next_turn", 0)),
     )
 
 

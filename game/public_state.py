@@ -79,6 +79,8 @@ def _side_to_dict(participant: ParticipantState) -> dict:
             "weapon": _slot_to_dict(participant.weapon),
             "armor": _slot_to_dict(participant.armor),
         },
+        # 蓄力结余是明牌：下回合开场能多打几张，双方都看得见。
+        "bonus_energy_next_turn": participant.bonus_energy_next_turn,
     }
 
 

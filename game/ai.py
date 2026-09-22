@@ -9,6 +9,7 @@ from game.catalog import (
     LONGSWORD_BOOST_KEYS,
     SKILL_COST,
     STARTING_ENERGY,
+    conditional_damage,
 )
 from game.models import AIDifficulty, CardDefinition, HeroDefinition, PendingAttack
 
@@ -30,6 +31,8 @@ RISK_WEIGHT = 6.0
 WEAPON_EATERS_PER_TURN = 2
 # 困难模式发现玩家下回合能击杀自己时，对非防御行动的扣分。
 DANGER_PENALTY = 100.0
+# 蓄力（1 费换下回合 +2 能量）的估值：草案固定值，与护盾牌同档，平衡轮再校准。
+CHARGE_SCORE = 6.0
 
 DEFENSIVE_EFFECTS = frozenset({"shield", "heal"})
 
@@ -68,6 +71,7 @@ class PublicParticipantState:
     armor_key: str | None = None
     weapon_used_this_turn: bool = False
     armor_used_this_turn: bool = False
+    bonus_energy_next_turn: int = 0
 
 
 @dataclass(frozen=True)
@@ -148,7 +152,7 @@ def _risk_multiplier(public_state: PublicParticipantState) -> float:
 def score_damage(observation: AIObservation, definition: CardDefinition) -> float:
     # 超出剩余生命的部分完全浪费；打在护盾上的部分只算削盾价值，不算生命威胁。
     opponent = observation.opponent_state
-    damage = _damage_with_weapon(observation, definition)
+    damage = _effective_damage(observation, definition)
     absorbed = min(damage, opponent.shield)
     effective = damage - absorbed
     useful = min(effective, opponent.hp)
@@ -159,16 +163,28 @@ def score_damage(observation: AIObservation, definition: CardDefinition) -> floa
     return score
 
 
-def _damage_with_weapon(observation: AIObservation, definition: CardDefinition) -> int:
-    """武器的加成口径必须和结算一致：一回合只加一次，用掉之后评分也跟着回落。"""
+def _effective_damage(observation: AIObservation, definition: CardDefinition) -> int:
+    """这一击真实会打出的伤害：条件加成与武器加成，口径与结算完全一致。
+
+    条件（破甲看护盾、处决看斩杀线）走 `conditional_damage()` 这个唯一入口；
+    武器一回合只加一次，用掉之后评分也跟着回落。
+    """
+    opponent = observation.opponent_state
+    damage = conditional_damage(
+        definition.value,
+        definition.key,
+        target_shield=opponent.shield,
+        target_hp=opponent.hp,
+        target_max_hp=opponent.max_hp,
+    )
     own = observation.self_state
     if (
         own.weapon_key is None
         or own.weapon_used_this_turn
         or definition.key not in LONGSWORD_BOOST_KEYS
     ):
-        return definition.value
-    return definition.value + CARDS[own.weapon_key].value
+        return damage
+    return damage + CARDS[own.weapon_key].value
 
 
 def score_equip(observation: AIObservation, definition: CardDefinition) -> float:
@@ -183,6 +199,15 @@ def score_equip(observation: AIObservation, definition: CardDefinition) -> float
         )
         return min(eaters, WEAPON_EATERS_PER_TURN) * definition.value
     return definition.value * _risk_multiplier(observation.self_state)
+
+
+def score_charge(observation: AIObservation, definition: CardDefinition) -> float:
+    """蓄力：把 1 点能量换成下回合的更多能量。
+
+    它是投资牌，价值随局面漂移很大，先给固定分（与护盾牌同档），
+    保证"有蓄力就用"不会输给空过；精确校准留给平衡调整轮。
+    """
+    return CHARGE_SCORE
 
 
 def score_heal(observation: AIObservation, definition: CardDefinition) -> float:
@@ -228,6 +253,8 @@ def _base_score(
         return score_shield(observation, definition)
     if definition.effect_type == "equip":
         return score_equip(observation, definition)
+    if definition.effect_type == "charge":
+        return score_charge(observation, definition)
     return 0.0
 
 
@@ -242,6 +269,8 @@ def estimate_player_threat(observation: AIObservation) -> int:
     """
     opponent = observation.opponent_state
     hero = HEROES[opponent.hero_key]
+    # 这里取的是卡牌基础值：破甲的条件上限 8 与处决的斩杀上限 12 都低于
+    # 火球 14，所以当前不必单独展开；将来出现更高上限的牌时必须同步这里。
     threats = [
         CARDS[key].value
         for key in observation.catalog_keys
@@ -467,26 +496,33 @@ def select_enemy_action(
     return _select(rank_enemy_actions(observation, difficulty), difficulty, rng)
 
 
-def estimate_enemy_intent(
-    observation: AIObservation, difficulty: AIDifficulty
-) -> EnemyIntent:
-    """预估电脑下回合的第一个动作，给玩家看的"计划"。
-
-    纯查询 + 确定性：把电脑的资源按"下回合开始"预演（能量回满、技能与装备
-    标记重置），用同一套候选与评分排出第一名。不消耗对局 RNG、不修改任何
-    状态；它下回合抽到的牌未知，所以按当前手牌预估——它是计划，不是承诺。
-    """
+def _next_turn_observation(observation: AIObservation) -> AIObservation:
+    """预演"自己的下个回合开始"：结算蓄力结余、回满能量、重置技能与装备标记。"""
     own = observation.self_state
-    next_turn = replace(
+    return replace(
         observation,
         self_state=replace(
             own,
-            energy=STARTING_ENERGY,
+            energy=STARTING_ENERGY + own.bonus_energy_next_turn,
+            bonus_energy_next_turn=0,
             skill_used_this_turn=False,
             weapon_used_this_turn=False,
             armor_used_this_turn=False,
         ),
     )
+
+
+def estimate_enemy_intent(
+    observation: AIObservation, difficulty: AIDifficulty
+) -> EnemyIntent:
+    """预估电脑下回合的第一个动作，给玩家看的"计划"。
+
+    纯查询 + 确定性：把电脑的资源按"下回合开始"预演（能量回满、蓄力结余、
+    技能与装备标记重置），用同一套候选与评分排出第一名。不消耗对局 RNG、
+    不修改任何状态；它下回合抽到的牌未知，所以按当前手牌预估——它是计划，
+    不是承诺。
+    """
+    next_turn = _next_turn_observation(observation)
     candidate = rank_enemy_actions(next_turn, difficulty)[0]
     return _intent_from_candidate(next_turn, candidate)
 
@@ -501,7 +537,7 @@ def _intent_from_candidate(
     definition = _definition_of(observation, candidate)
     source: Literal["card", "skill"] = "skill" if candidate.kind == "skill" else "card"
     if definition.effect_type == "damage":
-        damage = _damage_with_weapon(observation, definition)
+        damage = _effective_damage(observation, definition)
         return EnemyIntent(
             kind="attack",
             source=source,
