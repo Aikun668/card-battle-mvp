@@ -258,6 +258,23 @@ def _base_score(
     return 0.0
 
 
+def _worst_case_damage(
+    definition: CardDefinition, opponent: PublicParticipantState
+) -> int:
+    """按对手当前的公开状态，这张伤害牌最狠能打多少。
+
+    条件牌按"现在打"的口径展开：对手有盾时破甲就是 8、对手已在斩杀区时
+    处决就是 16——上界跟着局面走，而不是无条件取满。
+    """
+    return conditional_damage(
+        definition.value,
+        definition.key,
+        target_shield=opponent.shield,
+        target_hp=opponent.hp,
+        target_max_hp=opponent.max_hp,
+    )
+
+
 def estimate_player_threat(observation: AIObservation) -> int:
     """玩家下回合能打出的最高单体伤害，只用公开信息取一个最坏值。
 
@@ -269,10 +286,10 @@ def estimate_player_threat(observation: AIObservation) -> int:
     """
     opponent = observation.opponent_state
     hero = HEROES[opponent.hero_key]
-    # 这里取的是卡牌基础值：破甲的条件上限 8 与处决的斩杀上限 12 都低于
-    # 火球 14，所以当前不必单独展开；将来出现更高上限的牌时必须同步这里。
+    # 每张伤害牌按"公开信息下能打出的最高伤害"取上界：条件牌按最有利的分支
+    # 展开（处决在斩杀区是 16，已经超过火球 14），不留低估的口子。
     threats = [
-        CARDS[key].value
+        _worst_case_damage(CARDS[key], opponent)
         for key in observation.catalog_keys
         if CARDS[key].effect_type == "damage" and CARDS[key].cost <= STARTING_ENERGY
     ]

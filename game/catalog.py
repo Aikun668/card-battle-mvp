@@ -22,7 +22,7 @@ CARDS: dict[str, CardDefinition] = {
     # 条件牌：看局面生效，让"现在打还是留着"变成一次选择。
     "armor_break": CardDefinition("armor_break", "破甲", 1, "damage", 4),
     "charge": CardDefinition("charge", "蓄力", 1, "charge", 2),
-    "execute": CardDefinition("execute", "处决", 2, "damage", 6),
+    "execute": CardDefinition("execute", "处决", 2, "damage", 8),
 }
 
 # 公开牌表的键：AI 的最坏情况估算只能从这里取牌，不能读对手手里有什么。
@@ -45,6 +45,10 @@ CONDITIONAL_DAMAGE: dict[str, tuple[str, float]] = {
     "armor_break": ("target_shielded", 4),
     "execute": ("target_wounded", 2.0),
 }
+
+# 消耗牌：打出后从本局移除——不进弃牌堆、洗牌也回不来。"用掉就没了"
+# 让时机本身变成资源；机制是通用的，想给更多牌加消耗往这里加 key。
+EXHAUST_KEYS: frozenset[str] = frozenset({"execute"})
 
 
 def conditional_damage(

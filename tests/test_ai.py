@@ -1370,8 +1370,9 @@ def test_execute_scores_higher_inside_the_wounded_zone():
         battle.enemy_hand = [{"id": "enemy-execute", "key": "execute"}]
         return enemy_scores(battle)["enemy-execute"]
 
-    # 24 点上限的 30% 线是 7.2：7 点触发斩杀、8 点不触发。
-    assert score(7) > score(8)
+    # 24 点上限的 30% 线是 7.2：12 点（50%）只吃基础 8 伤，
+    # 7 点（29%）翻倍到 16 并直接收割——后者分高得多。
+    assert score(7) > score(12)
 
 
 def test_charge_is_a_candidate_with_a_positive_score():
@@ -1428,8 +1429,19 @@ def test_intent_reports_conditional_damage():
 
     intent = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
 
-    # 报告的是条件生效后的伤害：处决在斩杀区是 12，不是基础 6。
-    assert (intent.kind, intent.name, intent.value) == ("attack", "处决", 12)
+    # 报告的是条件生效后的伤害：处决在斩杀区是 16，不是基础 8。
+    assert (intent.kind, intent.name, intent.value) == ("attack", "处决", 16)
+
+
+def test_threat_estimate_accounts_for_the_execute_ceiling():
+    battle = battle_with_a_dangerous_enemy()
+    # 满血玩家：上界仍是火球 14。
+    assert estimate_player_threat(battle.enemy_observation()) == 14
+
+    battle.player.max_hp = 24
+    battle.player.hp = 7
+    # 残血玩家：处决在斩杀区翻倍到 16，成为新的上界。
+    assert estimate_player_threat(battle.enemy_observation()) == 16
 
 
 def test_ai_estimated_damage_matches_the_settlement():

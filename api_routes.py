@@ -3,7 +3,7 @@ import random
 from flask import Blueprint, jsonify, request, session
 
 from game.battle import BattleState
-from game.catalog import CARDS, HEROES
+from game.catalog import CARDS, EXHAUST_KEYS, HEROES
 from game.models import AIDifficulty, BattlePhase
 from game.public_state import public_battle_state
 from game.session_state import clear_battle, load_battle
@@ -57,6 +57,7 @@ def create_api_blueprint() -> Blueprint:
                     "cost": card.cost,
                     "effect_type": card.effect_type,
                     "value": card.value,
+                    "exhaust": card.key in EXHAUST_KEYS,
                 }
                 for card in CARDS.values()
             ]

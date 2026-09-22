@@ -4,6 +4,7 @@ from game.catalog import (
     CARDS,
     CONDITIONAL_DAMAGE,
     EQUIP_SLOTS,
+    EXHAUST_KEYS,
     HERO_DECKS,
     HEROES,
     conditional_damage,
@@ -110,7 +111,7 @@ def test_conditional_cards_match_their_cost_and_effect_values():
     assert CARDS["execute"].name == "处决"
     assert CARDS["execute"].cost == 2
     assert CARDS["execute"].effect_type == "damage"
-    assert CARDS["execute"].value == 6
+    assert CARDS["execute"].value == 8
 
 
 def test_each_hero_owns_exactly_one_conditional_card():
@@ -161,7 +162,7 @@ def test_execute_doubles_below_thirty_percent_health():
             target_hp=8,
             target_max_hp=24,
         )
-        == 6
+        == 8
     )
     assert (
         conditional_damage(
@@ -171,8 +172,13 @@ def test_execute_doubles_below_thirty_percent_health():
             target_hp=7,
             target_max_hp=24,
         )
-        == 12
+        == 16
     )
+
+
+def test_exhaust_rules_cover_exactly_the_exhaust_cards():
+    """用掉就移除的牌只此一处登记；「保留」本来就是人手一张的常态。"""
+    assert set(EXHAUST_KEYS) == {"execute"}
 
 
 def test_conditional_damage_leaves_plain_cards_alone():

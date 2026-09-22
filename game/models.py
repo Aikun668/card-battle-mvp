@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -74,6 +74,8 @@ class ParticipantState:
     armor_used_this_turn: bool = False
     # 蓄力结余：下个自己的回合开始时额外获得的能量，结算后清零。
     bonus_energy_next_turn: int = 0
+    # 移除区：消耗牌打出后从本局移除，不进取牌堆，也洗不回来。
+    exhaust_pile: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

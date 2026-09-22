@@ -11,6 +11,7 @@ from game.catalog import (
     CARDS,
     CATALOG_KEYS,
     EQUIP_SLOTS,
+    EXHAUST_KEYS,
     HERO_DECKS,
     HEROES,
     LONGSWORD_BOOST_KEYS,
@@ -250,7 +251,11 @@ class BattleState:
             self._equip(participant, definition)
             self.log.append(self._format_card_log(side, definition))
             return ActionResult(True, "")
-        participant.discard_pile.append(definition.key)
+        if definition.key in EXHAUST_KEYS:
+            # 消耗牌用掉即从本局移除：不进弃牌堆，洗牌也回不来。
+            participant.exhaust_pile.append(definition.key)
+        else:
+            participant.discard_pile.append(definition.key)
         if definition.effect_type == "damage":
             # 费用与弃牌在挂起前就结清，响应窗口里只决定这次伤害落不落地。
             return self._open_response(side, definition)
@@ -688,6 +693,7 @@ def _participant_to_payload(participant: ParticipantState) -> dict:
         "weapon_used_this_turn": participant.weapon_used_this_turn,
         "armor_used_this_turn": participant.armor_used_this_turn,
         "bonus_energy_next_turn": participant.bonus_energy_next_turn,
+        "exhaust_pile": list(participant.exhaust_pile),
     }
 
 
@@ -739,8 +745,9 @@ def _participant_from_payload(payload: dict) -> ParticipantState:
         armor=_equipped_card_from_payload(payload.get("armor")),
         weapon_used_this_turn=bool(payload.get("weapon_used_this_turn", False)),
         armor_used_this_turn=bool(payload.get("armor_used_this_turn", False)),
-        # 本次改动之前保存的对局没有蓄力字段，读出 0。
+        # 本次改动之前保存的对局没有蓄力和移除区字段，读出 0 和空列表。
         bonus_energy_next_turn=int(payload.get("bonus_energy_next_turn", 0)),
+        exhaust_pile=list(payload.get("exhaust_pile", [])),
     )
 
 

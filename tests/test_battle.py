@@ -988,12 +988,12 @@ def test_execute_doubles_only_below_the_wounded_line():
     healthy = make_battle()
     healthy.enemy_hand = []
     healthy.enemy.max_hp = 24
-    healthy.enemy.hp = 8  # 33%：没到斩杀线
+    healthy.enemy.hp = 12  # 50%：没到斩杀线
     healthy.hand = [{"id": "player-execute", "key": "execute"}]
 
     healthy.play_card("player-execute")
 
-    assert healthy.enemy.hp == 2
+    assert healthy.enemy.hp == 4
 
     wounded = make_battle()
     wounded.enemy_hand = []
@@ -1003,7 +1003,7 @@ def test_execute_doubles_only_below_the_wounded_line():
 
     wounded.play_card("player-execute")
 
-    assert wounded.enemy.hp == 0  # 12 点伤害打在 7 点生命上
+    assert wounded.enemy.hp == 0  # 16 点伤害打在 7 点生命上
 
 
 def test_charge_banks_energy_for_the_next_turn():
@@ -1062,6 +1062,80 @@ def test_participant_payload_without_the_charge_field_reads_as_zero():
         assert restored.participant(side).bonus_energy_next_turn == 0
 
 
+def test_an_exhaust_card_leaves_the_battle_for_good():
+    battle = make_battle()
+    battle.enemy_hand = []
+    battle.enemy.max_hp = 24
+    battle.enemy.hp = 12
+    battle.hand = [{"id": "player-execute", "key": "execute"}]
+
+    battle.play_card("player-execute")
+
+    participant = battle.participant(Side.PLAYER)
+    assert participant.exhaust_pile == ["execute"]
+    assert "execute" not in participant.discard_pile
+
+
+def test_a_dodged_exhaust_card_still_leaves_for_good():
+    battle = make_battle()
+    battle.enemy.max_hp = 24
+    battle.enemy.hp = 12
+    battle.enemy.energy = 3
+    battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+    battle.hand = [{"id": "player-execute", "key": "execute"}]
+
+    battle.play_card("player-execute")
+
+    # 无论这一下有没有被闪掉，费用与去向在挂起前就结清了：消耗牌照样移除。
+    assert battle.participant(Side.PLAYER).exhaust_pile == ["execute"]
+
+
+def test_exhausted_cards_never_come_back_when_the_discard_pile_is_shuffled():
+    battle = make_battle()
+    battle.enemy_hand = []
+    battle.enemy.max_hp = 24
+    battle.enemy.hp = 12
+    battle.hand = [{"id": "player-execute", "key": "execute"}]
+    battle.play_card("player-execute")
+
+    participant = battle.participant(Side.PLAYER)
+    # 抽牌堆清空、弃牌堆留一张：下一回合的补牌会触发洗牌。
+    participant.draw_pile = []
+    participant.discard_pile = ["slash"]
+    battle.end_player_turn()
+    battle.enemy_hand = []
+    withhold_enemy_skill(battle)
+    battle.resolve_enemy_turn()
+
+    visible = (
+        [card["key"] for card in participant.hand]
+        + participant.draw_pile
+        + participant.discard_pile
+    )
+    assert "execute" not in visible
+    assert participant.exhaust_pile == ["execute"]
+
+
+def test_exhaust_pile_survives_a_save_load_round_trip():
+    battle = make_battle()
+    battle.participant(Side.PLAYER).exhaust_pile.append("execute")
+
+    restored = BattleState.from_dict(battle.to_dict())
+
+    assert restored.participant(Side.PLAYER).exhaust_pile == ["execute"]
+
+
+def test_participant_payload_without_the_exhaust_field_reads_as_empty():
+    payload = make_battle().to_dict()
+    for side_key in ("player", "enemy"):
+        payload["participants"][side_key].pop("exhaust_pile")
+
+    restored = BattleState.from_dict(payload)
+
+    for side in (Side.PLAYER, Side.ENEMY):
+        assert restored.participant(side).exhaust_pile == []
+
+
 def assert_consistent(battle):
     """响应窗口只在有待响应攻击时存在；能量不为负；双方四个牌区守恒。"""
     pending = battle.pending_attack
@@ -1082,8 +1156,10 @@ def assert_consistent(battle):
             + Counter(participant.draw_pile)
             + Counter(participant.discard_pile)
             + Counter(equipped)
+            + Counter(participant.exhaust_pile)
         )
-        # 攻击挂起时那张牌已经在弃牌区，装备则在槽里，任何时刻都应当正好是整副牌。
+        # 攻击挂起时那张牌已经在弃牌区，装备在槽里，消耗牌在移除区：
+        # 任何时刻五个牌区加起来都应当正好是整副牌。
         assert keys == Counter(HERO_DECKS[participant.hero.key]), (side, keys)
 
 

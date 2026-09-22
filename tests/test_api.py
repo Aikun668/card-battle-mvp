@@ -275,6 +275,27 @@ def test_enemy_intent_does_not_leak_the_hidden_hand(tmp_path):
     assert "draw_pile" not in state["enemy"]
 
 
+def test_catalog_marks_exhaust_cards(tmp_path):
+    client = make_client(tmp_path)
+
+    cards = client.get("/api/cards").get_json()["data"]
+    execute = next(card for card in cards if card["key"] == "execute")
+    slash = next(card for card in cards if card["key"] == "slash")
+
+    assert execute["exhaust"] is True
+    assert slash["exhaust"] is False
+
+
+def test_public_state_publishes_the_exhaust_pile(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+
+    state = client.get("/api/game").get_json()["data"]
+
+    assert state["player"]["exhaust_pile"] == []
+    assert state["enemy"]["exhaust_pile"] == []
+
+
 def test_api_rejects_actions_without_a_live_game(tmp_path):
     client = make_client(tmp_path)
 
@@ -426,6 +447,7 @@ def test_public_state_shows_equipment_after_a_card_is_played(tmp_path):
             "cost": 1,
             "effect_type": "equip",
             "value": 2,
+            "exhaust": False,
         },
         "armor": None,
     }

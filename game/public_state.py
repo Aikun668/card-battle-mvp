@@ -1,6 +1,6 @@
 from game.ai import EnemyIntent, estimate_enemy_intent
 from game.battle import BattleState
-from game.catalog import CARDS, SKILL_COST
+from game.catalog import CARDS, EXHAUST_KEYS, SKILL_COST
 from game.models import (
     BattlePhase,
     CardDefinition,
@@ -29,6 +29,7 @@ def _card_to_dict(card: CardDefinition) -> dict:
         "cost": card.cost,
         "effect_type": card.effect_type,
         "value": card.value,
+        "exhaust": card.key in EXHAUST_KEYS,
     }
 
 
@@ -81,6 +82,8 @@ def _side_to_dict(participant: ParticipantState) -> dict:
         },
         # 蓄力结余是明牌：下回合开场能多打几张，双方都看得见。
         "bonus_energy_next_turn": participant.bonus_energy_next_turn,
+        # 移除区同样是明牌：打出去就没了的东西，对面也算得清。
+        "exhaust_pile": list(participant.exhaust_pile),
     }
 
 
