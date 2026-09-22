@@ -6,8 +6,10 @@ from game.ai import (
     AIObservation,
     PublicParticipantState,
     _after_action,
+    _intent_from_candidate,
     _tactical_score,
     choose_enemy_response,
+    estimate_enemy_intent,
     estimate_player_threat,
     get_available_enemy_actions,
     rank_enemy_actions,
@@ -1210,3 +1212,125 @@ def test_predicted_damage_never_exceeds_the_best_sequence():
     # 技能（10）+ 斩击（6）= 16 伤，两段连招必须压过单张火球（14 伤）。
     assert scores["skill"] > scores["enemy-fireball"]
     assert scores["enemy-slash"] > scores["enemy-fireball"]
+
+
+# --- 敌人意图预告 ---
+
+
+def test_intent_predicts_the_first_planned_action():
+    battle = make_battle()
+    battle.enemy.energy = 0
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+
+    intent = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+    assert (intent.kind, intent.source, intent.name, intent.value) == (
+        "attack",
+        "card",
+        "重击",
+        10,
+    )
+    assert "重击" in intent.text
+
+
+def test_intent_previews_the_next_turn_resources():
+    """玩家回合时电脑能量为 0：意图按"下回合能量回满"预估，而不是空过。"""
+    battle = make_battle()
+    battle.enemy.energy = 0
+    battle.enemy_hand = [{"id": "enemy-heavy", "key": "heavy_strike"}]
+
+    intent = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+    assert intent.kind == "attack"
+
+
+def test_intent_counts_the_weapon_bonus():
+    battle = enemy_wearing(make_battle(), "longsword")
+    battle.enemy.energy = 0
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+
+    intent = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+    # 长剑还没消耗：斩击的实际伤害是 6 + 2。
+    assert (intent.kind, intent.value) == ("attack", 8)
+
+
+def test_intent_maps_hero_skills():
+    attacker = battle_with_enemy_hero("mage")
+    attacker.enemy.energy = 0
+    attacker.enemy_hand = []
+
+    cast = estimate_enemy_intent(attacker.enemy_observation(), AIDifficulty.HARD)
+
+    assert (cast.kind, cast.source, cast.name, cast.value) == (
+        "attack",
+        "skill",
+        "火球术",
+        10,
+    )
+
+    defender = battle_with_enemy_hero("warrior")
+    defender.enemy.energy = 0
+    defender.enemy_hand = []
+
+    guard = estimate_enemy_intent(defender.enemy_observation(), AIDifficulty.HARD)
+
+    assert (guard.kind, guard.source, guard.name, guard.value) == (
+        "defend",
+        "skill",
+        "守护",
+        8,
+    )
+
+
+def test_intent_translates_a_pass_candidate():
+    """pass 在预演里几乎不可达（技能总会重置），但翻译口径要被钉住。"""
+    battle = make_battle()
+    observation = battle.enemy_observation()
+
+    intent = _intent_from_candidate(observation, ActionCandidate(kind="pass"))
+
+    assert (intent.kind, intent.source, intent.name, intent.value) == (
+        "pass",
+        "none",
+        None,
+        0,
+    )
+    assert "按兵不动" in intent.text
+
+
+def test_intent_never_stalls_because_the_skill_resets_every_turn():
+    """预演按"下回合开始"重置技能：只要它有技能，计划就不会是"按兵不动"。"""
+    for hero_key in ("warrior", "mage", "ranger"):
+        battle = battle_with_enemy_hero(hero_key)
+        battle.enemy.energy = 0
+        battle.enemy_hand = [{"id": "enemy-dodge", "key": "dodge"}]
+
+        intent = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+        assert intent.kind != "pass", hero_key
+
+
+def test_intent_follows_the_difficulty_of_its_planner():
+    """简单难度不连招：它的"计划"就是逐张贪心的第一名（火球）。"""
+    battle = battle_with_a_combo_choice()
+    battle.enemy.energy = 0
+
+    easy = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.EASY)
+    hard = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+    assert easy.name == "火球"
+    assert hard.name in {"斩击", None}  # 连招起手（技能或斩击）
+    assert hard.value == CARDS["slash"].value or hard.source == "skill"
+
+
+def test_intent_is_deterministic_and_does_not_touch_the_battle():
+    battle = battle_with_a_combo_choice()
+    before = battle.to_dict()
+    observation = battle.enemy_observation()
+
+    first = estimate_enemy_intent(observation, AIDifficulty.HARD)
+    second = estimate_enemy_intent(battle.enemy_observation(), AIDifficulty.HARD)
+
+    assert first == second
+    assert battle.to_dict() == before

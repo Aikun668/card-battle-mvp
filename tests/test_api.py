@@ -2,7 +2,7 @@ import random
 
 from app import create_app
 from game.battle import LEGACY_ENEMY_HERO_KEY, ROUND_LIMIT, BattleState
-from game.catalog import HEROES
+from game.catalog import CARDS, HEROES
 from game.models import Side
 from game.session_state import save_battle
 
@@ -206,6 +206,73 @@ def test_ai_difficulty_survives_reads_and_enemy_turns(tmp_path):
 
     after_turn = client.post("/api/game/actions/end-turn").get_json()["data"]
     assert after_turn["ai_difficulty"] == "easy"
+
+
+def test_public_state_publishes_the_enemy_intent_during_the_player_turn(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+
+    state = client.get("/api/game").get_json()["data"]
+
+    intent = state["enemy"]["intent"]
+    assert set(intent) == {"kind", "source", "name", "value", "text"}
+    assert intent["kind"] in {"attack", "defend", "heal", "equip", "pass"}
+    assert intent["source"] in {"card", "skill", "none"}
+    assert intent["value"] >= 0
+    assert intent["text"]
+
+
+def test_enemy_intent_is_deterministic_across_reads(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+
+    first = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
+    second = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
+
+    assert first == second
+
+
+def test_enemy_intent_is_null_outside_the_player_turn(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+    with client.session_transaction() as session:
+        session["battle"]["phase"] = "VICTORY"
+        session.modified = True
+
+    state = client.get("/api/game").get_json()["data"]
+
+    assert state["enemy"]["intent"] is None
+
+
+def test_enemy_intent_points_at_something_the_enemy_actually_has(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+    with client.session_transaction() as session:
+        enemy = side_state(session, "enemy")
+        hand_names = {CARDS[card["key"]].name for card in enemy["hand"]}
+        skill_name = HEROES[enemy["hero_key"]].skill_name
+
+    intent = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
+
+    if intent["source"] == "skill":
+        assert intent["name"] == skill_name
+    else:
+        assert intent["name"] in hand_names
+
+
+def test_enemy_intent_does_not_leak_the_hidden_hand(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/game", json={"hero_key": "warrior"})
+    before = client.get("/api/game").get_json()["data"]["enemy"]["intent"]
+    with client.session_transaction() as session:
+        side_state(session, "player")["hand"] = [{"id": "hidden", "key": "fireball"}]
+        session.modified = True
+
+    state = client.get("/api/game").get_json()["data"]
+
+    assert state["enemy"]["intent"] == before
+    assert "hand" not in state["enemy"]
+    assert "draw_pile" not in state["enemy"]
 
 
 def test_api_rejects_actions_without_a_live_game(tmp_path):

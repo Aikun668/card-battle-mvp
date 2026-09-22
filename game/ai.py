@@ -95,6 +95,17 @@ class ActionCandidate:
     score: float = 0.0
 
 
+@dataclass(frozen=True)
+class EnemyIntent:
+    """电脑"下回合第一个动作"的预估：给玩家看的计划，不是承诺。"""
+
+    kind: Literal["attack", "defend", "heal", "equip", "pass"]
+    source: Literal["card", "skill", "none"]
+    name: str | None
+    value: int
+    text: str
+
+
 def get_available_enemy_actions(observation: AIObservation) -> list[ActionCandidate]:
     own = observation.self_state
     candidates = [
@@ -454,6 +465,73 @@ def select_enemy_action(
     observation: AIObservation, difficulty: AIDifficulty, rng: random.Random
 ) -> ActionCandidate:
     return _select(rank_enemy_actions(observation, difficulty), difficulty, rng)
+
+
+def estimate_enemy_intent(
+    observation: AIObservation, difficulty: AIDifficulty
+) -> EnemyIntent:
+    """预估电脑下回合的第一个动作，给玩家看的"计划"。
+
+    纯查询 + 确定性：把电脑的资源按"下回合开始"预演（能量回满、技能与装备
+    标记重置），用同一套候选与评分排出第一名。不消耗对局 RNG、不修改任何
+    状态；它下回合抽到的牌未知，所以按当前手牌预估——它是计划，不是承诺。
+    """
+    own = observation.self_state
+    next_turn = replace(
+        observation,
+        self_state=replace(
+            own,
+            energy=STARTING_ENERGY,
+            skill_used_this_turn=False,
+            weapon_used_this_turn=False,
+            armor_used_this_turn=False,
+        ),
+    )
+    candidate = rank_enemy_actions(next_turn, difficulty)[0]
+    return _intent_from_candidate(next_turn, candidate)
+
+
+def _intent_from_candidate(
+    observation: AIObservation, candidate: ActionCandidate
+) -> EnemyIntent:
+    if candidate.kind == "pass":
+        return EnemyIntent(
+            kind="pass", source="none", name=None, value=0, text="预计按兵不动"
+        )
+    definition = _definition_of(observation, candidate)
+    source: Literal["card", "skill"] = "skill" if candidate.kind == "skill" else "card"
+    if definition.effect_type == "damage":
+        damage = _damage_with_weapon(observation, definition)
+        return EnemyIntent(
+            kind="attack",
+            source=source,
+            name=definition.name,
+            value=damage,
+            text=f"预计使用【{definition.name}】造成 {damage} 点伤害",
+        )
+    if definition.effect_type == "shield":
+        return EnemyIntent(
+            kind="defend",
+            source=source,
+            name=definition.name,
+            value=definition.value,
+            text=f"预计使用【{definition.name}】获得 {definition.value} 点护盾",
+        )
+    if definition.effect_type == "heal":
+        return EnemyIntent(
+            kind="heal",
+            source=source,
+            name=definition.name,
+            value=definition.value,
+            text=f"预计使用【{definition.name}】恢复 {definition.value} 点生命值",
+        )
+    return EnemyIntent(
+        kind="equip",
+        source=source,
+        name=definition.name,
+        value=definition.value,
+        text=f"预计装备【{definition.name}】",
+    )
 
 
 def choose_enemy_response(

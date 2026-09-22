@@ -1,3 +1,4 @@
+from game.ai import EnemyIntent, estimate_enemy_intent
 from game.battle import BattleState
 from game.catalog import CARDS, SKILL_COST
 from game.models import (
@@ -48,6 +49,16 @@ def _slot_to_dict(slot: CardDefinition | None) -> dict | None:
     return _card_to_dict(slot)
 
 
+def _intent_to_dict(intent: EnemyIntent) -> dict:
+    return {
+        "kind": intent.kind,
+        "source": intent.source,
+        "name": intent.name,
+        "value": intent.value,
+        "text": intent.text,
+    }
+
+
 def _side_to_dict(participant: ParticipantState) -> dict:
     """一方在牌面上公开的全部信息：血条、护盾、能量、英雄、技能状态和装备。
 
@@ -86,13 +97,23 @@ def public_battle_state(battle: BattleState) -> dict:
             for card in battle.hand
         ],
     }
+    enemy_state = _side_to_dict(battle.participant(Side.ENEMY))
+    # 意图只在玩家回合有意义：预告电脑下回合的第一个动作。它是纯查询、确定性的
+    # "计划"（不消耗对战随机数，也不改变任何状态），其余时刻一律为 None。
+    enemy_state["intent"] = (
+        _intent_to_dict(
+            estimate_enemy_intent(battle.enemy_observation(), battle.ai_difficulty)
+        )
+        if is_player_turn
+        else None
+    )
     return {
         "phase": battle.phase.value,
         "round_number": battle.round_number,
         "starting_side": battle.starting_side.value,
         "ai_difficulty": battle.ai_difficulty.value,
         "player": player_state,
-        "enemy": _side_to_dict(battle.participant(Side.ENEMY)),
+        "enemy": enemy_state,
         "response": {
             "active": player_is_defending,
             "card_name": pending_attack.card_name if player_is_defending else None,
