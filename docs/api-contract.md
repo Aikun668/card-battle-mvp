@@ -26,7 +26,7 @@
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | `GET` | `/api/heroes` | 获取角色列表和技能数据 |
-| `GET` | `/api/cards` | 获取卡牌定义（含长剑、铁甲两张装备牌，`effect_type` 为 `"equip"`） |
+| `GET` | `/api/cards` | 获取卡牌定义（`effect_type` 为 `"damage"` / `"shield"` / `"heal"` / `"dodge"` / `"equip"` / `"charge"` 六类，含两张装备牌与三张条件牌） |
 
 目录接口统一返回：
 
@@ -98,6 +98,7 @@ POST /api/game
         },
         "armor": null
       },
+      "bonus_energy_next_turn": 0,
       "hand": []
     },
     "enemy": {
@@ -118,6 +119,7 @@ POST /api/game
         "weapon": null,
         "armor": null
       },
+      "bonus_energy_next_turn": 0,
       "intent": {
         "kind": "attack",
         "source": "card",
@@ -144,7 +146,11 @@ POST /api/game
 }
 ```
 
-双方的血量、护盾、能量、英雄、技能状态和装备两边对称，`starting_side` 说明本局谁先手。`player` 额外带 `hand`（玩家自己的手牌），`enemy` 额外带 `intent`（它的下回合计划，见下节）；电脑的手牌与抽牌堆不进入 API 响应，也没有 `enemy_hand`、`enemy_draw_pile` 这类键，没有前端可以绕过这一点。前端只根据 `available_actions` 和当前状态决定按钮展示与禁用；最终合法性仍由后端判断。
+双方的血量、护盾、能量、蓄力结余、英雄、技能状态和装备两边对称，`starting_side` 说明本局谁先手。`player` 额外带 `hand`（玩家自己的手牌），`enemy` 额外带 `intent`（它的下回合计划，见下节）；电脑的手牌与抽牌堆不进入 API 响应，也没有 `enemy_hand`、`enemy_draw_pile` 这类键，没有前端可以绕过这一点。前端只根据 `available_actions` 和当前状态决定按钮展示与禁用；最终合法性仍由后端判断。
+
+### 蓄力字段
+
+`bonus_energy_next_turn` 是双方都有的公开字段：打出【蓄力】后累加（1 费换下回合 +2 能量），在持有者自己的回合开始时并入能量（`能量 = 3 + 结余`）并清零。双方都能看到对面攒了多少，前端可以据此提示"对方下回合能量更多"；`enemy.intent` 的预演也已包含它。
 
 ### 敌人意图字段
 
