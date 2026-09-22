@@ -982,6 +982,28 @@ def assert_consistent(battle):
         assert keys == Counter(HERO_DECKS[participant.hero.key]), (side, keys)
 
 
+def test_a_planned_enemy_turn_keeps_the_invariants_through_a_full_game():
+    """电脑由伤害连招规划驱动时，整局的不变量（能量非负、四区守恒）依然成立。"""
+    rng = random.Random(20260922)
+    for seed in range(6):
+        battle = BattleState.create(
+            ["warrior", "mage", "ranger"][seed % 3],
+            rng,
+            AIDifficulty.HARD,
+        )
+        assert_consistent(battle)
+        for _ in range(60):
+            if battle.is_finished():
+                break
+            if battle.phase is BattlePhase.PLAYER_TURN:
+                battle.end_turn_for(Side.PLAYER)
+            elif battle.phase is BattlePhase.RESPONSE:
+                battle.respond("pass")
+            else:
+                break
+            assert_consistent(battle)
+
+
 def test_random_play_stays_consistent_through_both_sides_responses():
     """随机对局覆盖双方闪避 / 放弃的递归续跑，守住不变量而不是某条固定路径。"""
     rng = random.Random(20260920)

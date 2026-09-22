@@ -41,6 +41,14 @@ DIFFICULTY_SELECTION: dict[AIDifficulty, tuple[float, ...]] = {
     AIDifficulty.MEDIUM: (0.88, 0.12),
 }
 
+# 伤害连招规划深度：简单不规划、中等看一手、困难规划到打光。
+# 能量上限 3，最深序列是三张 1 费牌，深度 3 已经覆盖全部可达序列。
+PLANNING_DEPTH: dict[AIDifficulty, int] = {
+    AIDifficulty.EASY: 0,
+    AIDifficulty.MEDIUM: 1,
+    AIDifficulty.HARD: 3,
+}
+
 
 @dataclass(frozen=True)
 class PublicParticipantState:
@@ -267,13 +275,122 @@ def hard_lookahead_adjustment(
     return -DANGER_PENALTY
 
 
-def score_enemy_action(
+def _tactical_score(
     observation: AIObservation, candidate: ActionCandidate, difficulty: AIDifficulty
 ) -> float:
+    """单张战术分：基础评分 + 困难模式的一步生存前瞻；不含伤害连招规划。"""
     score = _base_score(observation, candidate, difficulty)
     if difficulty is AIDifficulty.HARD:
         score += hard_lookahead_adjustment(observation, candidate)
     return score
+
+
+def _is_damage_action(observation: AIObservation, candidate: ActionCandidate) -> bool:
+    definition = _definition_of(observation, candidate)
+    return definition is not None and definition.effect_type == "damage"
+
+
+def _plans_sequence(observation: AIObservation, candidate: ActionCandidate) -> bool:
+    """参与连招规划的动作：伤害牌本身，以及能提升伤害的武器。
+
+    护盾、治疗、护甲不产生伤害，不参与规划：它们的价值跨回合，
+    塞进"本回合剩余能量"会诱导 AI 用它们填满资源来刷分。
+    """
+    definition = _definition_of(observation, candidate)
+    if definition is None:
+        return False
+    if definition.effect_type == "damage":
+        return True
+    return definition.effect_type == "equip" and EQUIP_SLOTS[definition.key] == "weapon"
+
+
+def _after_action(
+    observation: AIObservation, candidate: ActionCandidate
+) -> AIObservation | None:
+    """把候选模拟执行成一份新的观察视图；pass 或打不出的动作返回 None。
+
+    纯查询：只在不可变快照上替换字段，不触碰真实对局，也不引入新的信息。
+    """
+    own = observation.self_state
+    if candidate.kind == "pass":
+        return None
+    if candidate.kind == "skill":
+        return replace(
+            observation,
+            self_state=replace(
+                own,
+                energy=own.energy - SKILL_COST,
+                skill_used_this_turn=True,
+            ),
+        )
+    card = CARDS[candidate.card_key]
+    if card.cost > own.energy:
+        return None
+    updates: dict[str, object] = {"energy": own.energy - card.cost}
+    if card.effect_type == "equip":
+        updates[EQUIP_SLOTS[card.key] + "_key"] = card.key
+    elif (
+        card.key in LONGSWORD_BOOST_KEYS
+        and own.weapon_key is not None
+        and not own.weapon_used_this_turn
+    ):
+        updates["weapon_used_this_turn"] = True
+    hand = tuple(c for c in observation.own_hand if c["id"] != candidate.card_id)
+    return replace(
+        observation,
+        self_state=replace(own, **updates),
+        own_hand=hand,
+    )
+
+
+def _best_damage_value(
+    observation: AIObservation,
+    difficulty: AIDifficulty,
+    remaining: int,
+    boost_keys: frozenset[str] | None = None,
+) -> float:
+    """剩余资源还能兑现的最优伤害序列总价值。
+
+    只遍历伤害牌与伤害技能。boost_keys 不为 None 时只统计其中的牌：
+    武器只对它能加成的伤害负责，否则与武器无关的伤害也会被算进它的账上，
+    "长剑配火球"会被误判成值得先穿剑。
+    """
+    if remaining <= 0:
+        return 0.0
+    best = 0.0
+    for action in get_available_enemy_actions(observation):
+        if not _is_damage_action(observation, action):
+            continue
+        if boost_keys is not None and action.card_key not in boost_keys:
+            continue
+        after = _after_action(observation, action)
+        if after is None:
+            continue
+        value = _tactical_score(observation, action, difficulty)
+        value += _best_damage_value(after, difficulty, remaining - 1, boost_keys)
+        if value > best:
+            best = value
+    return best
+
+
+def score_enemy_action(
+    observation: AIObservation, candidate: ActionCandidate, difficulty: AIDifficulty
+) -> float:
+    """候选评分 = 战术分 + 伤害连招价值（按难度分层，简单难度不规划）。"""
+    score = _tactical_score(observation, candidate, difficulty)
+    depth = PLANNING_DEPTH.get(difficulty, 0)
+    if depth <= 0 or not _plans_sequence(observation, candidate):
+        return score
+    after = _after_action(observation, candidate)
+    if after is None:
+        return score
+    definition = _definition_of(observation, candidate)
+    boost_keys = (
+        LONGSWORD_BOOST_KEYS
+        if definition is not None and definition.effect_type == "equip"
+        else None
+    )
+    return score + _best_damage_value(after, difficulty, depth, boost_keys)
 
 
 def score_dodge(observation: AIObservation) -> float:

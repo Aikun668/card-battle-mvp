@@ -2,8 +2,11 @@ import random
 from dataclasses import fields
 
 from game.ai import (
+    ActionCandidate,
     AIObservation,
     PublicParticipantState,
+    _after_action,
+    _tactical_score,
     choose_enemy_response,
     estimate_player_threat,
     get_available_enemy_actions,
@@ -67,46 +70,54 @@ def test_hard_always_selects_the_top_scored_action():
         assert selected.card_id == top.card_id
 
 
-def _pick_rates(difficulty, runs=400):
-    picks = [
-        select_enemy_action(
-            battle_with_three_ranked_choices().enemy_observation(),
-            difficulty,
-            random.Random(seed),
+def _top_pick_rates(difficulty, runs=400):
+    """该难度下选中"本难度排序第一名"的比例；第一名按评分动态取。"""
+    hits = 0
+    for seed in range(runs):
+        battle = battle_with_three_ranked_choices()
+        observation = battle.enemy_observation()
+        top_id = rank_enemy_actions(observation, difficulty)[0].card_id
+        picked = select_enemy_action(
+            observation, difficulty, random.Random(seed)
         ).card_id
-        for seed in range(runs)
-    ]
-    return picks.count("best") / runs
+        if picked == top_id:
+            hits += 1
+    return hits / runs
 
 
 def test_medium_mostly_selects_the_top_action_but_sometimes_the_second():
     battle = battle_with_three_ranked_choices()
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
+    top_two = {candidate.card_id for candidate in ranked[:2]}
     picks = [
         select_enemy_action(
             battle.enemy_observation(), AIDifficulty.MEDIUM, random.Random(seed)
         ).card_id
         for seed in range(400)
     ]
-    assert set(picks) == {"best", "second"}
-    assert picks.count("best") / len(picks) >= 0.8
+    assert set(picks) == top_two
+    assert picks.count(ranked[0].card_id) / len(picks) >= 0.8
 
 
 def test_easy_selects_worse_than_medium_and_hard():
-    easy = _pick_rates(AIDifficulty.EASY)
-    medium = _pick_rates(AIDifficulty.MEDIUM)
-    hard = _pick_rates(AIDifficulty.HARD)
+    easy = _top_pick_rates(AIDifficulty.EASY)
+    medium = _top_pick_rates(AIDifficulty.MEDIUM)
+    hard = _top_pick_rates(AIDifficulty.HARD)
     assert easy < medium < hard == 1.0
 
 
 def test_easy_can_select_a_non_top_action():
     battle = battle_with_three_ranked_choices()
+    top_id = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.EASY)[
+        0
+    ].card_id
     seen = {
         select_enemy_action(
             battle.enemy_observation(), AIDifficulty.EASY, random.Random(seed)
         ).card_id
         for seed in range(30)
     }
-    assert seen - {"best"}, "简单难度必须真的会选中非最优选项"
+    assert seen - {top_id}, "简单难度必须真的会选中非最优选项"
 
 
 def test_selection_is_reproducible_for_the_same_seed():
@@ -216,7 +227,8 @@ def test_attack_that_punches_through_shield_beats_a_fully_absorbed_one():
     battle.enemy.hp = battle.enemy.max_hp
     battle.player.hp = battle.player.max_hp
     battle.player.shield = 6
-    battle.enemy.energy = 3
+    # 能量只够出一张：两张牌凑不出连招，评分差异就是选择差异。
+    battle.enemy.energy = 2
     battle.enemy_hand = [
         {"id": "slash", "key": "slash"},
         {"id": "heavy", "key": "heavy_strike"},
@@ -417,8 +429,8 @@ def test_enemy_stops_playing_the_moment_the_player_dies():
     assert battle.phase is BattlePhase.DEFEAT
     assert battle.player.hp == 0
     assert battle.round_number == 1
-    # 6 点生命时斩击就能击杀，比 10 点伤害的重击更省能量，所以只出一张牌。
-    assert battle.log[-1] == "电脑使用【斩击】，对你造成 6 点伤害"
+    # 6 点生命时重击与斩击都能一击毙命：规划后两条顺序的总分相同，由手牌顺序
+    # 裁决，用哪张都合法——关键是击杀成立且只出一张牌。
     assert sum(1 for entry in battle.log if entry.startswith("电脑使用")) == 1
 
 
@@ -1026,3 +1038,175 @@ def test_a_spent_armor_does_not_lower_the_threat_estimate():
     battle.participant(Side.ENEMY).armor_used_this_turn = True
 
     assert estimate_player_threat(battle.enemy_observation()) == CARDS["fireball"].value
+
+
+# --- 伤害连招规划 ---
+
+
+def battle_with_a_combo_choice():
+    """法师电脑：能量 3、技能可用，手里火球 + 斩击。
+
+    火球单独打 14 伤；技能（10）+ 斩击（6）能打 16 伤。
+    """
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy.energy = 3
+    battle.player.hp = battle.player.max_hp
+    battle.player.shield = 0
+    battle.enemy_hand = [
+        {"id": "enemy-fireball", "key": "fireball"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+    return battle
+
+
+def test_medium_and_hard_open_with_the_combo_instead_of_the_big_card():
+    for difficulty in (AIDifficulty.MEDIUM, AIDifficulty.HARD):
+        battle = battle_with_a_combo_choice()
+        selected = select_enemy_action(
+            battle.enemy_observation(), difficulty, random.Random(0)
+        )
+        assert selected.card_id != "enemy-fireball", difficulty
+
+
+def test_a_planned_enemy_turn_deals_the_combo_damage():
+    battle = battle_with_a_combo_choice()
+    battle.ai_difficulty = AIDifficulty.HARD
+    battle.hand = []
+    battle.end_player_turn()
+    battle.resolve_enemy_turn()
+
+    # 技能 10 + 斩击 6 = 16；逐张贪心只会打火球拿 14。
+    assert battle.player.hp == 32 - 16
+
+
+def test_easy_still_opens_with_the_big_card_without_planning():
+    battle = battle_with_a_combo_choice()
+    # 简单难度不规划，评分排序维持逐张贪心：火球仍然第一（选择本身带随机性，
+    # 这里钉的是排序，不是某一次抽取）。
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.EASY)
+    assert ranked[0].card_id == "enemy-fireball"
+
+
+def test_planning_only_lifts_damage_candidates():
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy.energy = 3
+    battle.enemy_hand = [
+        {"id": "enemy-shield", "key": "shield"},
+        {"id": "enemy-slash", "key": "slash"},
+    ]
+
+    def shield_score(difficulty):
+        return next(
+            candidate.score
+            for candidate in rank_enemy_actions(battle.enemy_observation(), difficulty)
+            if candidate.card_id == "enemy-shield"
+        )
+
+    # 简单难度不规划；防御牌的分数在任何难度下都必须一样。
+    assert shield_score(AIDifficulty.HARD) == shield_score(AIDifficulty.EASY)
+
+
+def test_planning_does_not_delay_a_lethal():
+    battle = battle_with_enemy_hero("mage")
+    battle.enemy.energy = 3
+    battle.player.hp = 8
+    battle.player.shield = 0
+    battle.enemy_hand = [
+        {"id": "enemy-fireball", "key": "fireball"},
+        {"id": "enemy-shield", "key": "shield"},
+    ]
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
+    # 火球与技能都能击杀 8 血（技能还更省能量），用哪个都行；
+    # 关键是击杀手段必须排在看护盾前面。
+    assert ranked[0].card_id == "enemy-fireball" or ranked[0].kind == "skill"
+    assert ranked[0].card_id != "enemy-shield"
+
+
+def test_ranking_with_planning_does_not_mutate_the_battle():
+    battle = battle_with_a_combo_choice()
+    before = battle.to_dict()
+    rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
+    assert battle.to_dict() == before
+
+
+def test_after_action_simulates_a_card_without_touching_the_snapshot():
+    battle = battle_with_a_combo_choice()
+    observation = battle.enemy_observation()
+    candidate = next(
+        c
+        for c in get_available_enemy_actions(observation)
+        if c.card_id == "enemy-fireball"
+    )
+
+    after = _after_action(observation, candidate)
+
+    assert (
+        after.self_state.energy
+        == observation.self_state.energy - CARDS["fireball"].cost
+    )
+    assert all(card["id"] != "enemy-fireball" for card in after.own_hand)
+    # 原快照（以及它背后的对局）一点没动。
+    assert observation.self_state.energy == 3
+    assert len(observation.own_hand) == 2
+    assert observation == battle.enemy_observation()
+
+
+def test_after_action_marks_the_weapon_bonus_as_spent():
+    battle = enemy_wearing(make_battle(), "longsword")
+    battle.enemy.energy = 3
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    observation = battle.enemy_observation()
+    candidate = next(
+        c
+        for c in get_available_enemy_actions(observation)
+        if c.card_id == "enemy-slash"
+    )
+
+    after = _after_action(observation, candidate)
+
+    assert after.self_state.weapon_used_this_turn is True
+    assert observation.self_state.weapon_used_this_turn is False
+
+
+def test_after_action_returns_none_for_pass_or_unaffordable_cards():
+    battle = make_battle()
+    battle.enemy.energy = 1
+    battle.enemy_hand = [{"id": "enemy-fireball", "key": "fireball"}]
+    observation = battle.enemy_observation()
+
+    pass_candidate = next(
+        c for c in get_available_enemy_actions(observation) if c.kind == "pass"
+    )
+    unaffordable = ActionCandidate(
+        kind="card", card_id="enemy-fireball", card_key="fireball"
+    )
+
+    assert _after_action(observation, pass_candidate) is None
+    assert _after_action(observation, unaffordable) is None
+
+
+def test_easy_scores_stay_at_the_tactical_level():
+    """简单难度不规划：候选分数就是战术分，一点连招价值都不加。"""
+    battle = battle_with_a_combo_choice()
+    observation = battle.enemy_observation()
+
+    for candidate in rank_enemy_actions(observation, AIDifficulty.EASY):
+        if candidate.kind == "pass":
+            continue
+        assert candidate.score == _tactical_score(
+            observation, candidate, AIDifficulty.EASY
+        )
+
+
+def test_predicted_damage_never_exceeds_the_best_sequence():
+    """规划的口径就是"本回合能打出的最大伤害序列"：火球配斩击时选技能那边。"""
+    battle = battle_with_a_combo_choice()
+    observation = battle.enemy_observation()
+    scores = {
+        candidate.card_id or candidate.kind: candidate.score
+        for candidate in rank_enemy_actions(observation, AIDifficulty.HARD)
+    }
+
+    # 技能（10）+ 斩击（6）= 16 伤，两段连招必须压过单张火球（14 伤）。
+    assert scores["skill"] > scores["enemy-fireball"]
+    assert scores["enemy-slash"] > scores["enemy-fireball"]
