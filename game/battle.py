@@ -57,6 +57,14 @@ PVE_MODE = "pve"
 PVP_MODE = "pvp"
 
 
+def _normalized_mode(raw: object) -> str:
+    """读存档用：未知模式按人机读，坏档不让整局读取失败。
+
+    外部入口（API 层）会拒绝非法 mode；这里只兜底"旧档 / 被改坏的档"。
+    """
+    return raw if raw in {PVE_MODE, PVP_MODE} else PVE_MODE
+
+
 def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
     """电脑从不依赖玩家英雄进行反选，只用一个 RNG 从同一英雄池里抽。"""
     return rng.choice(list(HEROES.values()))
@@ -110,6 +118,10 @@ class BattleState:
         self.rng = rng or random.Random()
         self.ai_difficulty = ai_difficulty
         self.starting_side = starting_side
+        if mode not in {PVE_MODE, PVP_MODE}:
+            # 合法值由 API 层负责校验（INVALID_MODE）。这里再拦一道内部误用：
+            # "mode 拼错 → 静默按人机跑"是最难查的那类错，不如当场炸响。
+            raise ValueError(f"unknown battle mode: {mode!r}")
         self.mode = mode
 
     def is_human_side(self, side: Side) -> bool:
@@ -717,8 +729,9 @@ class BattleState:
                 payload.get("ai_difficulty", AIDifficulty.MEDIUM.value)
             ),
             starting_side=Side(payload.get("starting_side", Side.PLAYER.value)),
-            # 本次改动之前保存的对局没有模式字段，一律按人机模式读出。
-            mode=payload.get("mode", PVE_MODE),
+            # 本次改动之前保存的对局没有模式字段，一律按人机模式读出；
+            # 被改坏的档同样容错（不因一个坏字段整局读不出来）。
+            mode=_normalized_mode(payload.get("mode", PVE_MODE)),
         )
 
 

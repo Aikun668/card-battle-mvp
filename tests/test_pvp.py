@@ -7,6 +7,8 @@
 
 import random
 
+import pytest
+
 from app import create_app
 from game.battle import BattleState
 from game.models import Side
@@ -304,6 +306,18 @@ def test_pvp_result_copy_is_neutral_for_both_readers(tmp_path):
     assert "玩家1" in data["result"]["text"]
     assert "你" not in data["result"]["text"]
     assert "电脑" not in data["result"]["text"]
+
+
+def test_battle_state_rejects_an_unknown_mode_and_tolerates_a_bad_archive(tmp_path):
+    """模型层防御：拼错 mode 当场抛错；被改坏的存档按人机模式容错读出。"""
+    with pytest.raises(ValueError):
+        BattleState.create("warrior", random.Random(7), mode="coop")
+
+    good = BattleState.create("warrior", random.Random(7))
+    payload = good.to_dict()
+    payload["mode"] = "coop"
+    fallback = BattleState.from_dict(payload)
+    assert fallback.mode == "pve"
 
 
 def test_pvp_seat_errors_and_turn_ownership(tmp_path):

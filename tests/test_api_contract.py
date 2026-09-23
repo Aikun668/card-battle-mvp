@@ -16,6 +16,8 @@ from game.session_state import save_battle
 # ---- 契约常量：与 docs/api-contract.md 的总表一一对应 ----
 
 PHASES = {"PLAYER_TURN", "RESPONSE", "VICTORY", "DEFEAT", "DRAW"}
+# 双人模式把 ENEMY_TURN 提升为一等公民（含义是"等座位 2 操作"）。
+PVP_PHASES = PHASES | {"ENEMY_TURN"}
 SIDES = {"player", "enemy"}
 DIFFICULTIES = {"easy", "medium", "hard"}
 EFFECT_TYPES = {"damage", "shield", "heal", "dodge", "equip", "charge"}
@@ -184,6 +186,37 @@ def test_public_state_contract(tmp_path):
     assert not (set(state["enemy"]) & {"hand", "draw_pile", "discard_pile"})
 
 
+def test_pvp_state_contract_keeps_enemy_turn_in_the_enum(tmp_path):
+    """双人模式下 ENEMY_TURN 是一等公民：第二座位先手时创建即返回它。
+
+    契约枚举必须把这条形状钉住，而不是只靠行为测试在兜。
+    """
+    client = make_client(tmp_path)
+    with client.session_transaction() as session:
+        save_battle(
+            session,
+            BattleState.create(
+                "warrior",
+                random.Random(7),
+                starting_side=Side.ENEMY,
+                mode="pvp",
+                opponent_hero_key="mage",
+            ),
+        )
+        session.modified = True
+
+    state = get_state(client)
+
+    assert set(state) == STATE_KEYS
+    assert state["mode"] == "pvp"
+    assert state["viewer"] == "player"
+    assert state["phase"] in PVP_PHASES
+    assert state["phase"] == "ENEMY_TURN"
+    # 视角语义在双人契约里同样成立：手牌只在自己一侧，intent 恒为空。
+    assert "hand" in state["player"] and "hand" not in state["enemy"]
+    assert state["enemy"]["intent"] is None
+
+
 def test_intent_contract(tmp_path):
     client = make_client(tmp_path)
     install_battle(client)
@@ -224,6 +257,21 @@ def test_result_contract_for_kill_settlement_and_draw(tmp_path):
     assert set(after["result"]) == RESULT_KEYS
     assert after["result"]["winner"] == "player"
     assert after["result"]["reason"] == "hp"
+
+    # 护盾更厚：血量相同、护盾不同时的结算分支。
+    with client.session_transaction() as session:
+        battle = session["battle"]
+        battle["phase"] = "PLAYER_TURN"
+        battle["round_number"] = ROUND_LIMIT
+        for side in ("player", "enemy"):
+            battle["participants"][side]["combatant"]["hp"] = 20
+        battle["participants"]["player"]["combatant"]["shield"] = 5
+        battle["participants"]["enemy"]["combatant"]["shield"] = 0
+        session.modified = True
+    after = client.post("/api/game/actions/end-turn").get_json()["data"]
+    assert after["phase"] == "VICTORY"
+    assert after["result"]["winner"] == "player"
+    assert after["result"]["reason"] == "shield"
 
     # 完全平局：血量与护盾都相同。
     with client.session_transaction() as session:
