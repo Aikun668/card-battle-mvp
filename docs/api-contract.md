@@ -166,7 +166,7 @@
 - `hero_key`：必须是 `/api/heroes` 里的 key，否则 `422 INVALID_HERO`；
 - `ai_difficulty`：`easy` / `medium` / `hard`，省略为 `medium`，非法值 `422 INVALID_DIFFICULTY`；
 - `mode`：`pve`（默认，人机）或 `pvp`（本地双人热座），非法值 `422 INVALID_MODE`；
-- `opponent_hero_key`：仅 `pvp` 有意义——玩家2 选的英雄；省略则随机抽，非法值 `422 INVALID_HERO`；`pve` 下忽略；
+- `opponent_hero_key`：指定对位英雄——`pvp` 下是玩家2 选的英雄，`pve` 下可用来指定电脑英雄；省略则随机抽；非法值（**两种模式都校验**）`422 INVALID_HERO`；
 - 重复调用会**以新对局覆盖当前对局**（旧对局不保留）；
 - 先手由服务端 RNG 决定。电脑先手时，它的开局回合在创建流程里跑到"需要玩家决定的点"为止：返回 `PLAYER_TURN`（回合已跑完）、`RESPONSE`（有攻击等玩家响应，`response.active` 为 `true`）或终局——**永远不会返回 `ENEMY_TURN`**；
 - 玩家在 `RESPONSE` 下用 `POST /api/game/actions/respond` 响应（`dodge` 或 `pass`）；响应后电脑继续把回合跑完，最终回到 `PLAYER_TURN`。
