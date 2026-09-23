@@ -380,6 +380,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
     assert paused["player"]["energy"] == 2
     assert paused["response"] == {
         "active": True,
+        "attacker": "enemy",
         "card_name": "重击",
         "damage": 10,
         "dodge_cost": 1,

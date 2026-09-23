@@ -47,6 +47,15 @@ HIT_LABEL = {Side.PLAYER: "电脑", Side.ENEMY: "你"}
 # 回合交接和闪避响应都用完整称呼，玩家一侧也显式写"玩家"。
 SIDE_LABEL = {Side.PLAYER: "玩家", Side.ENEMY: "电脑"}
 
+# 双人热座：日志是两边共享的一份，称呼必须中性——"你 / 电脑"对其中一方总是错的。
+# 座位 player 记为玩家1，座位 enemy 记为玩家2，两侧读数一致。
+PVP_ACTOR_LABEL = {Side.PLAYER: "玩家1", Side.ENEMY: "玩家2"}
+PVP_HIT_LABEL = {Side.PLAYER: "玩家2", Side.ENEMY: "玩家1"}
+PVP_SIDE_LABEL = {Side.PLAYER: "玩家1", Side.ENEMY: "玩家2"}
+
+PVE_MODE = "pve"
+PVP_MODE = "pvp"
+
 
 def choose_enemy_hero(rng: random.Random) -> HeroDefinition:
     """电脑从不依赖玩家英雄进行反选，只用一个 RNG 从同一英雄池里抽。"""
@@ -91,6 +100,7 @@ class BattleState:
         rng: random.Random | None = None,
         ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
         starting_side: Side = Side.PLAYER,
+        mode: str = PVE_MODE,
     ) -> None:
         self.participants = participants
         self.round_number = round_number
@@ -100,6 +110,23 @@ class BattleState:
         self.rng = rng or random.Random()
         self.ai_difficulty = ai_difficulty
         self.starting_side = starting_side
+        self.mode = mode
+
+    def is_human_side(self, side: Side) -> bool:
+        """这个座位由真人操作吗：人机模式只有玩家一侧，双人模式两边都是。"""
+        return self.mode == PVP_MODE or side is Side.PLAYER
+
+    def actor_label(self, side: Side) -> str:
+        """出手方在日志里的称呼；双人模式用中性的"玩家1/玩家2"。"""
+        return (PVP_ACTOR_LABEL if self.mode == PVP_MODE else ACTOR_LABEL)[side]
+
+    def hit_label(self, side: Side) -> str:
+        """被打方在日志里的称呼。"""
+        return (PVP_HIT_LABEL if self.mode == PVP_MODE else HIT_LABEL)[side]
+
+    def side_label(self, side: Side) -> str:
+        """整句称呼（回合交接、结算宣告用）。"""
+        return (PVP_SIDE_LABEL if self.mode == PVP_MODE else SIDE_LABEL)[side]
 
     def participant(self, side: Side) -> ParticipantState:
         return self.participants[side]
@@ -130,9 +157,17 @@ class BattleState:
         rng: random.Random,
         ai_difficulty: AIDifficulty = AIDifficulty.MEDIUM,
         starting_side: Side | None = None,
+        *,
+        mode: str = PVE_MODE,
+        opponent_hero_key: str | None = None,
     ) -> "BattleState":
         hero = HEROES[hero_key]
-        enemy_hero = choose_enemy_hero(rng)
+        # 双人模式里对位英雄由玩家2 选定（可选）；人机模式沿用随机抽取。
+        enemy_hero = (
+            HEROES[opponent_hero_key]
+            if opponent_hero_key is not None
+            else choose_enemy_hero(rng)
+        )
         first_side = starting_side or rng.choice(list(Side))
         state = cls(
             participants={
@@ -148,7 +183,9 @@ class BattleState:
                 Side.ENEMY: ParticipantState(
                     hero=enemy_hero,
                     combatant=Combatant(
-                        name=ENEMY_NAME,
+                        # 双人模式对面也是真人：用英雄名（与玩家侧对称）；
+                        # 人机模式保持"电脑"，明示对手是 AI。
+                        name=enemy_hero.name if mode == PVP_MODE else ENEMY_NAME,
                         max_hp=enemy_hero.max_hp,
                         hp=enemy_hero.max_hp,
                     ),
@@ -163,19 +200,25 @@ class BattleState:
             rng=rng,
             ai_difficulty=ai_difficulty,
             starting_side=first_side,
+            mode=mode,
         )
-        state.log.append(f"战斗开始，玩家选择角色：{hero.name}")
-        state.log.append(f"电脑选择角色：{enemy_hero.name}")
+        if mode == PVP_MODE:
+            state.log.append(f"战斗开始，玩家1选择角色：{hero.name}")
+            state.log.append(f"玩家2选择角色：{enemy_hero.name}")
+        else:
+            state.log.append(f"战斗开始，玩家选择角色：{hero.name}")
+            state.log.append(f"电脑选择角色：{enemy_hero.name}")
         for side in (Side.PLAYER, Side.ENEMY):
             state.draw_cards_for(side, STARTING_HAND)
         # 先手优势修正：先手方第 1 个回合只有 2 点能量（后手正常 3 点）。
         # 两条路径都在这一行覆盖——player 先手时它就是玩家看到的开局；
         # enemy 先手时它正好落在 create 内跑掉的那一回合上。
         state.participant(first_side).combatant.energy = STARTING_ENERGY - 1
-        if first_side is Side.ENEMY:
+        if first_side is Side.ENEMY and mode != PVP_MODE:
             # 电脑先手时在创建流程里把它这一回合推到"需要玩家决定的点"为止：
             # 要么回合跑完（返回玩家回合），要么停在响应窗口等调用方转交玩家。
             # 响应是玩家自己的决定，创建流程绝不替他放弃。
+            # 双人热座没有电脑席位：先手是玩家2 时直接把 ENEMY_TURN 交给调用方。
             state.resolve_enemy_turn()
         return state
 
@@ -227,6 +270,8 @@ class BattleState:
         return -1
 
     def _wrong_turn_message(self, side: Side) -> str:
+        if self.mode == PVP_MODE:
+            return "现在不是你的回合"
         if side is Side.PLAYER:
             return "现在是电脑回合，请等待电脑行动"
         return "现在不是电脑的回合"
@@ -298,9 +343,9 @@ class BattleState:
         self, side: Side, definition: CardDefinition, dealt: int | None = None
     ) -> str:
         """`dealt` 只有伤害牌会用：长剑加成和铁甲减伤都改变真正落下的数字。"""
-        actor = ACTOR_LABEL[side]
+        actor = self.actor_label(side)
         if definition.effect_type == "damage":
-            target = HIT_LABEL[side]
+            target = self.hit_label(side)
             amount = definition.value if dealt is None else dealt
             return f"{actor}使用【{definition.name}】，对{target}造成 {amount} 点伤害"
         if definition.effect_type == "shield":
@@ -328,7 +373,7 @@ class BattleState:
         skill = participant.hero
         participant.combatant.energy -= SKILL_COST
         participant.skill_used_this_turn = True
-        actor = ACTOR_LABEL[side]
+        actor = self.actor_label(side)
         if skill.skill_type == "shield":
             participant.combatant.shield += skill.skill_value
             self.log.append(
@@ -339,7 +384,7 @@ class BattleState:
             dealt = self._deal_damage(OPPONENT_SIDE[side], skill.skill_value)
             self.log.append(
                 f"{actor}释放技能【{skill.skill_name}】，"
-                f"对{HIT_LABEL[side]}造成 {dealt} 点伤害"
+                f"对{self.hit_label(side)}造成 {dealt} 点伤害"
             )
         elif skill.skill_type == "damage_draw":
             dealt = self._deal_damage(OPPONENT_SIDE[side], skill.skill_value)
@@ -347,7 +392,7 @@ class BattleState:
             extra = "并抽取 1 张牌" if drawn else "但手牌已满，未抽到牌"
             self.log.append(
                 f"{actor}释放技能【{skill.skill_name}】，"
-                f"对{HIT_LABEL[side]}造成 {dealt} 点伤害，{extra}"
+                f"对{self.hit_label(side)}造成 {dealt} 点伤害，{extra}"
             )
         self._check_terminal()
         return ActionResult(True, "")
@@ -376,7 +421,7 @@ class BattleState:
             )
             return
         self.phase = BattlePhase.VICTORY if player_wins else BattlePhase.DEFEAT
-        winner = SIDE_LABEL[Side.PLAYER if player_wins else Side.ENEMY]
+        winner = self.side_label(Side.PLAYER if player_wins else Side.ENEMY)
         self.log.append(f"达到 {ROUND_LIMIT} 回合上限，{winner}{reason}，本局获胜")
 
     def current_side(self) -> Side | None:
@@ -418,7 +463,7 @@ class BattleState:
             return ActionResult(False, "本局已经结束，请重新开始")
         if self.current_side() is not side:
             return ActionResult(False, self._wrong_turn_message(side))
-        next_actor = SIDE_LABEL[OPPONENT_SIDE[side]]
+        next_actor = self.side_label(OPPONENT_SIDE[side])
         self.log.append(f"第 {self.round_number} 回合结束，{next_actor}开始行动")
         return self.advance_turn()
 
@@ -428,6 +473,8 @@ class BattleState:
     def resolve_enemy_turn(self) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
+        if self.mode == PVP_MODE:
+            return ActionResult(False, "双人模式下没有电脑回合")
         if self.phase is not BattlePhase.ENEMY_TURN:
             return ActionResult(False, "还没有进入电脑回合")
         return self._run_enemy_actions()
@@ -488,11 +535,19 @@ class BattleState:
             and self.participant(side).combatant.energy >= dodge.cost
         )
 
-    def can_dodge(self) -> bool:
-        """页面只问一件事：玩家现在能不能闪避。"""
-        return self.phase is BattlePhase.RESPONSE and self._has_available_dodge(
-            Side.PLAYER
+    def can_respond_dodge(self, side: Side) -> bool:
+        """这个座位现在能不能用闪避响应挂起的攻击。"""
+        pending = self.pending_attack
+        return (
+            self.phase is BattlePhase.RESPONSE
+            and pending is not None
+            and pending.defender is side
+            and self._has_available_dodge(side)
         )
+
+    def can_dodge(self) -> bool:
+        """兼容旧调用：玩家一侧的闪避可用性（人机页面长期只问这一个座位）。"""
+        return self.can_respond_dodge(Side.PLAYER)
 
     def respond_for(self, side: Side, action: str) -> ActionResult:
         if self.is_finished():
@@ -525,9 +580,10 @@ class BattleState:
         participant.hand.pop(index)
         participant.discard_pile.append(dodge.key)
         self.log.append(
-            f"{ACTOR_LABEL[self.pending_attack.attacker]}使用【{self.pending_attack.card_name}】"
+            f"{self.actor_label(self.pending_attack.attacker)}"
+            f"使用【{self.pending_attack.card_name}】"
         )
-        self.log.append(f"{SIDE_LABEL[side]}使用【{dodge.name}】，抵消了本次伤害")
+        self.log.append(f"{self.side_label(side)}使用【{dodge.name}】，抵消了本次伤害")
         return self._finish_response()
 
     def _attack_damage(self, attacker: Side, definition: CardDefinition) -> int:
@@ -583,8 +639,9 @@ class BattleState:
             damage=damage,
         )
         self.phase = BattlePhase.RESPONSE
-        if defender is Side.ENEMY:
+        if not self.is_human_side(defender):
             # 电脑防御时不阻塞调用方，但阶段先如实置为响应，再当场定夺。
+            # 双人热座里防守方是真人：挂起等对方的响应请求（走 seat=enemy）。
             self._resolve_enemy_response()
         return ActionResult(True, "")
 
@@ -602,15 +659,19 @@ class BattleState:
         return self._finish_response()
 
     def _finish_response(self) -> ActionResult:
-        """响应结算完把回合交还攻击方；攻击方是电脑就接着跑完它剩下的行动。"""
+        """响应结算完把回合交还攻击方；攻击方由电脑操作就接着跑完它剩下的行动。
+
+        判断依据必须是 is_human_side 而不是"她是不是 ENEMY"：双人热座里
+        attacker 是玩家2（ENEMY 座位）时，回合必须留在本人手里，AI 不得接管。
+        """
         attacker = self.pending_attack.attacker
         self.pending_attack = None
         if self.is_finished():
             return ActionResult(True, "")
         self.phase = TURN_PHASE[attacker]
-        if attacker is Side.ENEMY:
-            return self._run_enemy_actions()
-        return ActionResult(True, "")
+        if self.is_human_side(attacker):
+            return ActionResult(True, "")
+        return self._run_enemy_actions()
 
     def _resolve_enemy_response(self) -> None:
         action = choose_enemy_response(
@@ -633,6 +694,7 @@ class BattleState:
             "log": list(self.log),
             "pending_attack": _pending_attack_to_payload(self.pending_attack),
             "ai_difficulty": self.ai_difficulty.value,
+            "mode": self.mode,
         }
 
     @classmethod
@@ -655,6 +717,8 @@ class BattleState:
                 payload.get("ai_difficulty", AIDifficulty.MEDIUM.value)
             ),
             starting_side=Side(payload.get("starting_side", Side.PLAYER.value)),
+            # 本次改动之前保存的对局没有模式字段，一律按人机模式读出。
+            mode=payload.get("mode", PVE_MODE),
         )
 
 

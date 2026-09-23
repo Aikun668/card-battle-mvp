@@ -26,6 +26,8 @@ SKILL_TYPES = {"shield", "damage", "damage_draw"}
 
 STATE_KEYS = {
     "phase",
+    "mode",
+    "viewer",
     "round_number",
     "starting_side",
     "ai_difficulty",
@@ -55,7 +57,7 @@ HAND_CARD_KEYS = CARD_KEYS | {"id"}
 SKILL_KEYS = {"name", "type", "value", "cost", "used_this_turn"}
 EQUIPMENT_KEYS = {"weapon", "armor"}
 INTENT_KEYS = {"kind", "source", "name", "value", "text"}
-RESPONSE_KEYS = {"active", "card_name", "damage", "dodge_cost"}
+RESPONSE_KEYS = {"active", "attacker", "card_name", "damage", "dodge_cost"}
 ACTIONS_KEYS = {"play_card", "use_skill", "end_turn", "respond"}
 RESPOND_KEYS = {"dodge", "pass"}
 RESULT_KEYS = {"winner", "reason", "text"}
@@ -145,6 +147,8 @@ def test_public_state_contract(tmp_path):
     state = get_state(client)
 
     assert set(state) == STATE_KEYS
+    assert state["mode"] == "pve"
+    assert state["viewer"] == "player"
     assert state["phase"] in PHASES
     assert state["starting_side"] in SIDES
     assert state["ai_difficulty"] in DIFFICULTIES
@@ -260,6 +264,12 @@ def test_error_envelope_and_status_codes_contract(tmp_path):
     assert invalid_difficulty.status_code == 422
     assert invalid_difficulty.get_json()["error"]["code"] == "INVALID_DIFFICULTY"
 
+    invalid_mode = client.post(
+        "/api/game", json={"hero_key": "warrior", "mode": "coop"}
+    )
+    assert invalid_mode.status_code == 422
+    assert invalid_mode.get_json()["error"]["code"] == "INVALID_MODE"
+
     # 缺字段：400。
     install_battle(client)
     bad_request = client.post("/api/game/actions/card", json={})
@@ -271,6 +281,24 @@ def test_error_envelope_and_status_codes_contract(tmp_path):
     )
     assert bad_response_action.status_code == 400
     assert bad_response_action.get_json()["error"]["code"] == "INVALID_REQUEST"
+
+    # 座位校验：值非法、或该座位由电脑操作（人机模式的 enemy）都是 400 INVALID_SEAT。
+    bad_seat = client.post("/api/game/actions/end-turn", json={"seat": "seat3"})
+    assert bad_seat.status_code == 400
+    assert bad_seat.get_json()["error"]["code"] == "INVALID_SEAT"
+
+    ai_seat = client.post("/api/game/actions/end-turn", json={"seat": "enemy"})
+    assert ai_seat.status_code == 400
+    assert ai_seat.get_json()["error"]["code"] == "INVALID_SEAT"
+
+    # GET 的 seat 走同样的校验（query 参数版本）。
+    assert client.get("/api/game?seat=player").status_code == 200
+    bad_get_seat = client.get("/api/game?seat=seat9")
+    assert bad_get_seat.status_code == 400
+    assert bad_get_seat.get_json()["error"]["code"] == "INVALID_SEAT"
+    ai_get_seat = client.get("/api/game?seat=enemy")
+    assert ai_get_seat.status_code == 400
+    assert ai_get_seat.get_json()["error"]["code"] == "INVALID_SEAT"
 
     # 规则拒绝：422，且 data 里带最新公开状态（前端出错即可同步状态）。
     rejected = client.post("/api/game/actions/card", json={"card_id": "not-in-hand"})
@@ -291,6 +319,8 @@ def test_create_game_response_contract(tmp_path):
     assert set(payload) == ENVELOPE_KEYS
     assert payload["ok"] is True and payload["error"] is None
     assert set(payload["data"]) == STATE_KEYS
+    assert payload["data"]["mode"] == "pve"
+    assert payload["data"]["viewer"] == "player"
     assert payload["data"]["phase"] in {"PLAYER_TURN", "RESPONSE", "VICTORY", "DEFEAT", "DRAW"}
 
 

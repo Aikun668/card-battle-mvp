@@ -1,5 +1,5 @@
 from game.ai import EnemyIntent, estimate_enemy_intent
-from game.battle import ROUND_LIMIT, BattleState
+from game.battle import PVE_MODE, PVP_MODE, ROUND_LIMIT, BattleState
 from game.catalog import (
     CARD_TEXTS,
     CARDS,
@@ -80,9 +80,13 @@ def _result_to_dict(battle: BattleState) -> dict | None:
 
     reason 区分四条收尾路径：kill（击倒）/ hp（10 回合结算血多）/
     shield（血量相同、护盾更厚）/ draw（完全平局）。
+
+    文案随模式走：人机模式可以对玩家说"你 / 电脑"；双人热座的回应是共享的，
+    必须中性（"玩家1 / 玩家2"），否则对其中一方总是错的。
     """
     if not battle.is_finished():
         return None
+    pvp = battle.mode == PVP_MODE
     if battle.phase is BattlePhase.DRAW:
         return {
             "winner": None,
@@ -91,27 +95,28 @@ def _result_to_dict(battle: BattleState) -> dict | None:
         }
     winner = "player" if battle.phase is BattlePhase.VICTORY else "enemy"
     if battle.player.hp <= 0 or battle.enemy.hp <= 0:
-        return {
-            "winner": winner,
-            "reason": "kill",
-            "text": (
-                "你击败了对手，本局获胜"
-                if winner == "player"
-                else "你被电脑击败，本局失败"
-            ),
-        }
+        if pvp:
+            text = f"{battle.side_label(Side(winner))}击败对手，本局获胜"
+        elif winner == "player":
+            text = "你击败了对手，本局获胜"
+        else:
+            text = "你被电脑击败，本局失败"
+        return {"winner": winner, "reason": "kill", "text": text}
     # 走到这里只可能是 10 回合结算：先比生命值、再比护盾，与结算规则一致。
     if battle.player.hp != battle.enemy.hp:
         reason, subject = "hp", "生命值更高"
     else:
         reason, subject = "shield", "护盾更厚"
-    owner = "你" if winner == "player" else "电脑"
-    outcome = "本局获胜" if winner == "player" else "本局失败"
-    return {
-        "winner": winner,
-        "reason": reason,
-        "text": f"达到 {ROUND_LIMIT} 回合上限，{owner}{subject}，{outcome}",
-    }
+    if pvp:
+        text = (
+            f"达到 {ROUND_LIMIT} 回合上限，"
+            f"{battle.side_label(Side(winner))}{subject}，本局获胜"
+        )
+    else:
+        owner = "你" if winner == "player" else "电脑"
+        outcome = "本局获胜" if winner == "player" else "本局失败"
+        text = f"达到 {ROUND_LIMIT} 回合上限，{owner}{subject}，{outcome}"
+    return {"winner": winner, "reason": reason, "text": text}
 
 
 def _intent_to_dict(intent: EnemyIntent) -> dict:
@@ -151,56 +156,72 @@ def _side_to_dict(participant: ParticipantState) -> dict:
     }
 
 
-def public_battle_state(battle: BattleState) -> dict:
-    is_player_turn = battle.phase is BattlePhase.PLAYER_TURN
+def public_battle_state(battle: BattleState, viewer: Side = Side.PLAYER) -> dict:
+    """一份"给某个座位看"的公开状态。
+
+    viewer 决定三件事：手牌只挂在自己一侧、available_actions 只回答自己的操作、
+    response.active 只描述自己是否需要响应。其余公开信息（血、盾、能量、装备、
+    移除区、意图）双方完全对称。
+
+    人机模式下调用方永远用默认的 viewer=player，输出与旧契约完全一致；
+    双人热座按当前操作者传 viewer，谁的手牌就挂在谁那一侧。
+    """
+    is_viewer_turn = battle.current_side() is viewer
     pending_attack = battle.pending_attack
-    # 电脑做防御方时响应在结算里当场定夺，不会挂起，所以只有玩家被攻击时才需要页面问响应。
-    player_is_defending = (
-        pending_attack is not None and pending_attack.defender is Side.PLAYER
+    # 挂起的攻击只会等真人防守方（电脑防守在结算里当场定夺、不会挂起），
+    # 所以"该响应的人"就是 viewer 当且仅当 viewer 是这次攻击的防守方。
+    viewer_is_defending = (
+        pending_attack is not None and pending_attack.defender is viewer
     )
-    # 双方公开字段完全对称，只有玩家多一份自己的手牌；电脑的手牌与抽牌堆不出现在这里。
-    player_state = {
-        **_side_to_dict(battle.participant(Side.PLAYER)),
-        "hand": [
-            {"id": card["id"], **card_to_dict(CARDS[card["key"]])}
-            for card in battle.hand
-        ],
-    }
+    viewer_participant = battle.participant(viewer)
+    # 双方公开字段完全对称；手牌是私有信息，只挂在 viewer 自己那一侧。
+    player_state = _side_to_dict(battle.participant(Side.PLAYER))
     enemy_state = _side_to_dict(battle.participant(Side.ENEMY))
-    # 意图只在玩家回合有意义：预告电脑下回合的第一个动作。它是纯查询、确定性的
-    # "计划"（不消耗对战随机数，也不改变任何状态），其余时刻一律为 None。
+    viewer_state = player_state if viewer is Side.PLAYER else enemy_state
+    viewer_state["hand"] = [
+        {"id": card["id"], **card_to_dict(CARDS[card["key"]])}
+        for card in viewer_participant.hand
+    ]
+    # 意图只在"人机模式的玩家回合"有意义：预告电脑下回合的第一个动作。它是纯查询、
+    # 确定性的"计划"（不消耗对战随机数，也不改变任何状态），其余时刻一律为 None。
+    # 双人热座没有电脑计划，恒为 None。
     enemy_state["intent"] = (
         _intent_to_dict(
             estimate_enemy_intent(battle.enemy_observation(), battle.ai_difficulty)
         )
-        if is_player_turn
+        if battle.mode == PVE_MODE and battle.phase is BattlePhase.PLAYER_TURN
         else None
     )
     return {
         "phase": battle.phase.value,
+        "mode": battle.mode,
+        "viewer": viewer.value,
         "round_number": battle.round_number,
         "starting_side": battle.starting_side.value,
         "ai_difficulty": battle.ai_difficulty.value,
         "player": player_state,
         "enemy": enemy_state,
         "response": {
-            "active": player_is_defending,
-            "card_name": pending_attack.card_name if player_is_defending else None,
-            "damage": pending_attack.damage if player_is_defending else 0,
+            # active 是"该我响应吗"。攻击方视角下依然能读到 attacker / 牌名 / 伤害
+            # （挂起本身是公开信息），只是 active 为 false。
+            "active": viewer_is_defending,
+            "attacker": pending_attack.attacker.value if pending_attack else None,
+            "card_name": pending_attack.card_name if pending_attack else None,
+            "damage": pending_attack.damage if pending_attack else 0,
             "dodge_cost": CARDS["dodge"].cost,
         },
         "available_actions": {
-            "play_card": is_player_turn and not battle.is_finished(),
+            "play_card": is_viewer_turn and not battle.is_finished(),
             "use_skill": (
-                is_player_turn
+                is_viewer_turn
                 and not battle.is_finished()
-                and not battle.skill_used_this_turn
-                and battle.player.energy >= SKILL_COST
+                and not viewer_participant.skill_used_this_turn
+                and viewer_participant.combatant.energy >= SKILL_COST
             ),
-            "end_turn": is_player_turn and not battle.is_finished(),
+            "end_turn": is_viewer_turn and not battle.is_finished(),
             "respond": {
-                "dodge": battle.can_dodge(),
-                "pass": player_is_defending,
+                "dodge": battle.can_respond_dodge(viewer),
+                "pass": viewer_is_defending,
             },
         },
         # 终局结果；未结束时为 None。与 phase 同时给出，结果页直接读。
