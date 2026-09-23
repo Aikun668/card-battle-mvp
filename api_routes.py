@@ -90,13 +90,11 @@ def create_api_blueprint() -> Blueprint:
         mode = payload.get("mode", PVE_MODE)
         if mode not in {PVE_MODE, PVP_MODE}:
             return error_response("INVALID_MODE", "模式必须是 pve 或 pvp", status=422)
-        # opponent_hero_key 只在双人模式生效（玩家2 选的英雄）；人机模式忽略。
+        # opponent_hero_key 指定对位英雄：双人模式下是玩家2 选的英雄，人机模式下
+        # 可用来指定电脑英雄（省略则随机抽取）。两种模式都校验非法值——曾经只在
+        # pvp 下校验，pve 传非法值时会在模型层 KeyError 变成 500。
         opponent_hero_key = payload.get("opponent_hero_key")
-        if (
-            mode == PVP_MODE
-            and opponent_hero_key is not None
-            and opponent_hero_key not in HEROES
-        ):
+        if opponent_hero_key is not None and opponent_hero_key not in HEROES:
             return error_response("INVALID_HERO", "请选择有效角色", status=422)
         # 电脑先手时 create() 已经同步跑完它开局的整个回合（人机模式），这里只会拿到
         # 玩家回合、响应窗口或终局；双人模式下没有电脑席位，先手是玩家2 时直接返回 ENEMY_TURN。

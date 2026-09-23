@@ -318,6 +318,13 @@ def test_error_envelope_and_status_codes_contract(tmp_path):
     assert invalid_mode.status_code == 422
     assert invalid_mode.get_json()["error"]["code"] == "INVALID_MODE"
 
+    # 对手英雄在两种模式下都校验：曾经 pve 传非法值会在模型层 KeyError 变成 500。
+    invalid_opponent = client.post(
+        "/api/game", json={"hero_key": "warrior", "opponent_hero_key": "dragon"}
+    )
+    assert invalid_opponent.status_code == 422
+    assert invalid_opponent.get_json()["error"]["code"] == "INVALID_HERO"
+
     # 缺字段：400。
     install_battle(client)
     bad_request = client.post("/api/game/actions/card", json={})
