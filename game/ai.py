@@ -5,6 +5,7 @@ from typing import Literal
 from game.catalog import (
     CARDS,
     EQUIP_SLOTS,
+    HERO_DECKS,
     HEROES,
     LONGSWORD_BOOST_KEYS,
     SKILL_COST,
@@ -105,7 +106,7 @@ class ActionCandidate:
 class EnemyIntent:
     """电脑"下回合第一个动作"的预估：给玩家看的计划，不是承诺。"""
 
-    kind: Literal["attack", "defend", "heal", "equip", "pass"]
+    kind: Literal["attack", "defend", "heal", "equip", "charge", "pass"]
     source: Literal["card", "skill", "none"]
     name: str | None
     value: int
@@ -147,6 +148,12 @@ def _definition_of(
 
 
 def _risk_multiplier(public_state: PublicParticipantState) -> float:
+    """失血风险系数。当前 `RISK_WEIGHT = 0.0`，所以它是恒等变换（永远返回 1.0）。
+
+    保留它是为了把"风险定价"留在同一个口径上：将来重估权重时，治疗、护盾、护甲
+    与闪避四处会一起改变。不要把这里读成"失血正在抬高防守分"——失血本身不改变
+    攻防价值，结算是比血量、护盾不计分。
+    """
     missing_ratio = 1 - public_state.hp / public_state.max_hp
     return 1 + missing_ratio**2 * RISK_WEIGHT
 
@@ -280,20 +287,26 @@ def _worst_case_damage(
 def estimate_player_threat(observation: AIObservation) -> int:
     """玩家下回合能打出的最高单体伤害，只用公开信息取一个最坏值。
 
-    公开牌表里买得起的伤害牌一律算作可能，再加上玩家英雄的伤害技能；他手里
-    究竟有哪张牌不看。公开弃牌记录也不参与：抽牌堆抽空时弃牌会洗回去，"这张
-    已经打掉了"并不能排除它下回合回到玩家手上，拿它收窄上界会低估威胁。
+    威胁只来自"对手英雄的那一副牌"：牌组构成是公开信息（每局英雄明牌），所以遍历
+    牌组里真实存在且买得起的伤害牌，再按最有利的分支展开条件牌；他手里究竟有哪张
+    牌不看。公开弃牌记录也不参与：抽牌堆抽空时弃牌会洗回去，"这张已经打掉了"并不能
+    排除它下回合回到玩家手上，拿它收窄上界会低估威胁。
+    条件牌的判定对象是"被打的人"——也就是电脑自己：处决的翻倍要看**电脑**是不是进了
+    斩杀区，破甲的加成要看**电脑**身上有没有盾，而不是玩家自己的血量与护盾。
     玩家的技能次数在轮到自己时会重置，所以这里按"下回合可用"计；自己身上的铁甲
     同理，本回合还没用掉的就按能挡下 2 点算。
     """
     opponent = observation.opponent_state
     hero = HEROES[opponent.hero_key]
+    deck_keys = frozenset(HERO_DECKS[hero.key])
     # 每张伤害牌按"公开信息下能打出的最高伤害"取上界：条件牌按最有利的分支
-    # 展开（处决在斩杀区是 16，已经超过火球 14），不留低估的口子。
+    # 展开（电脑进了斩杀区时处决就是 16，已经超过火球 14），不留低估的口子。
     threats = [
-        _worst_case_damage(CARDS[key], opponent)
+        _worst_case_damage(CARDS[key], observation.self_state)
         for key in observation.catalog_keys
-        if CARDS[key].effect_type == "damage" and CARDS[key].cost <= STARTING_ENERGY
+        if key in deck_keys
+        and CARDS[key].effect_type == "damage"
+        and CARDS[key].cost <= STARTING_ENERGY
     ]
     if SKILL_EFFECT_TYPES.get(hero.skill_type) == "damage":
         threats.append(hero.skill_value)
@@ -413,6 +426,10 @@ def _best_damage_value(
     只遍历伤害牌与伤害技能。boost_keys 不为 None 时只统计其中的牌：
     武器只对它能加成的伤害负责，否则与武器无关的伤害也会被算进它的账上，
     "长剑配火球"会被误判成值得先穿剑。
+
+    已知近似：模拟不推进对手状态（`_after_action()` 只改自己），所以削盾价值、
+    条件加成与溢出伤害在序列里按"对手没掉血、护盾没被削过"重复计价。它只影响
+    排序的相对高低：真实结算与意图都走 `conditional_damage()`，不受影响。
     """
     if remaining <= 0:
         return 0.0
@@ -579,6 +596,18 @@ def _intent_from_candidate(
             name=definition.name,
             value=definition.value,
             text=f"预计使用【{definition.name}】恢复 {definition.value} 点生命值",
+        )
+    if definition.effect_type == "charge":
+        # 蓄力不是装备：它有独立的 kind 与文案，不能落进下面的兜底分支。
+        return EnemyIntent(
+            kind="charge",
+            source=source,
+            name=definition.name,
+            value=definition.value,
+            text=(
+                f"预计使用【{definition.name}】，"
+                f"下回合额外获得 {definition.value} 点能量"
+            ),
         )
     return EnemyIntent(
         kind="equip",

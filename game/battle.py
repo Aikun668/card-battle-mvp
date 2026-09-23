@@ -434,6 +434,8 @@ class BattleState:
 
     def _run_enemy_actions(self) -> ActionResult:
         # 上限只是防止意外死循环，不是游戏规则：正常情况因无牌可打而结束回合。
+        # 它是"每次续跑"的上限：攻击挂起后由 _finish_response() 重新进入本函数，
+        # 计数从头开始。当前所有动作都消耗能量或牌，所以不会真的转圈。
         for _ in range(HAND_LIMIT + 1):
             if self.is_finished() or self.phase is BattlePhase.RESPONSE:
                 # 攻击挂起等玩家响应时先收工，剩下的行动由 _finish_response() 续跑。

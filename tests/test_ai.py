@@ -14,6 +14,7 @@ from game.ai import (
     estimate_enemy_intent,
     estimate_player_threat,
     get_available_enemy_actions,
+    hard_lookahead_adjustment,
     rank_enemy_actions,
     rank_enemy_responses,
     score_dodge,
@@ -161,9 +162,11 @@ def test_easy_never_picks_an_action_with_no_upside():
 
 def test_hard_lookahead_flips_to_defence_when_the_player_can_kill_next_turn():
     battle = make_battle()
-    # 固定生命上限，"半血恐惧"的评分才不会随本局随机到的电脑英雄漂移。
+    # 固定生命上限，评分才不会随本局随机到的电脑英雄漂移。
+    # 玩家是战士（make_battle），他牌组里最狠的一刀是重击 10；电脑 9 血，
+    # 下回合确实会被打死，所以困难模式必须把非防御动作压到护盾下面。
     battle.enemy.max_hp = 28
-    battle.enemy.hp = 14
+    battle.enemy.hp = 9
     battle.enemy.shield = 0
     battle.enemy.energy = 3
     battle.player.hp = battle.player.max_hp
@@ -363,7 +366,12 @@ def test_enemy_goes_for_lethal_damage_when_the_player_is_low():
     assert ranked[0].card_id == "enemy-fireball"
 
 
-def test_enemy_shields_when_hurt_and_no_heal_is_available():
+def test_enemy_stays_on_offence_when_hurt_but_not_in_lethal_danger():
+    """受伤本身不转防守（RISK_WEIGHT = 0）：14 血、玩家又打不死它时它继续进攻。
+
+    会转防守的是"下回合可能被打死"，那条路径归困难模式的威胁预判，
+    见 test_hard_lookahead_flips_to_defence_when_the_player_can_kill_next_turn()。
+    """
     battle = make_battle()
     battle.enemy.hp = 14
     battle.player.hp = 24
@@ -372,7 +380,7 @@ def test_enemy_shields_when_hurt_and_no_heal_is_available():
         {"id": "enemy-slash", "key": "slash"},
     ]
     ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
-    assert ranked[0].card_id == "enemy-shield"
+    assert ranked[0].card_id == "enemy-slash"
 
 
 def test_enemy_passes_when_it_cannot_afford_any_card():
@@ -860,7 +868,7 @@ def test_the_observation_types_have_nowhere_to_put_the_opponent_hand_or_deck():
     }
 
 
-def test_threat_estimate_ignores_the_hidden_hand_and_uses_the_public_table():
+def test_threat_estimate_ignores_the_hidden_hand_and_uses_the_opponent_deck():
     battle = battle_with_a_dangerous_enemy()
 
     battle.hand = []
@@ -868,15 +876,20 @@ def test_threat_estimate_ignores_the_hidden_hand_and_uses_the_public_table():
     battle.hand = [{"id": "hidden-slash", "key": "slash"}]
     with_a_hidden_slash = estimate_player_threat(battle.enemy_observation())
 
-    # 玩家手里有什么不影响估算；公开牌表里买得起的最强伤害牌才是上界。
-    assert without_any_card == with_a_hidden_slash == CARDS["fireball"].value
+    # 玩家手里有什么不影响估算；他英雄牌组里买得起的最强伤害牌才是上界。
+    # 玩家是战士：牌组里没有火球（14），最狠的一刀是重击 10。
+    assert without_any_card == with_a_hidden_slash == CARDS["heavy_strike"].value
 
 
-def test_threat_estimate_never_drops_below_the_public_table_maximum():
-    """技能也要算进去（法师火球术 10、游侠连射 6），只是当前都被火球 14 压过。"""
+def test_threat_estimate_follows_the_opponent_hero_deck():
+    """威胁只看对手英雄的那副牌：法师的牌组里才有火球 14。"""
     battle = battle_with_a_dangerous_enemy()
+
+    assert estimate_player_threat(battle.enemy_observation()) == CARDS["heavy_strike"].value
+
     battle.participants[Side.PLAYER].hero = HEROES["mage"]
 
+    # 技能也要算进去（法师火球术 10、游侠连射 6），但都被火球 14 压过。
     assert estimate_player_threat(battle.enemy_observation()) == CARDS["fireball"].value
 
 
@@ -1047,6 +1060,7 @@ def test_armor_reduces_the_estimated_player_threat():
 
 def test_a_spent_armor_does_not_lower_the_threat_estimate():
     battle = enemy_wearing(make_battle(), "iron_armor")
+    battle.participant(Side.PLAYER).hero = HEROES["mage"]
     battle.participant(Side.ENEMY).armor_used_this_turn = True
 
     assert estimate_player_threat(battle.enemy_observation()) == CARDS["fireball"].value
@@ -1309,6 +1323,53 @@ def test_intent_translates_a_pass_candidate():
     assert "按兵不动" in intent.text
 
 
+def test_intent_translates_a_charge_candidate():
+    """蓄力不是装备：它有独立的 kind 与文案，不能落进兜底分支。"""
+    battle = make_battle()
+    observation = battle.enemy_observation()
+
+    intent = _intent_from_candidate(
+        observation,
+        ActionCandidate(kind="card", card_id="enemy-charge", card_key="charge"),
+    )
+
+    assert (intent.kind, intent.source, intent.name, intent.value) == (
+        "charge",
+        "card",
+        "蓄力",
+        CARDS["charge"].value,
+    )
+    assert "能量" in intent.text
+
+
+def test_every_playable_effect_has_its_own_intent_kind():
+    """闸门：新增效果类型必须补自己的意图分支，兜底不得把新机制说成"装备"。"""
+    expected = {
+        "slash": "attack",
+        "heavy_strike": "attack",
+        "fireball": "attack",
+        "armor_break": "attack",
+        "execute": "attack",
+        "shield": "defend",
+        "heal": "heal",
+        "longsword": "equip",
+        "iron_armor": "equip",
+        "charge": "charge",
+    }
+    observation = make_battle().enemy_observation()
+
+    for key, kind in expected.items():
+        intent = _intent_from_candidate(
+            observation,
+            ActionCandidate(kind="card", card_id=f"card-{key}", card_key=key),
+        )
+        assert intent.kind == kind, key
+
+    # 闪避是响应牌，永远不进电脑的主动候选，所以没有意图分支——它是被排除的，
+    # 不是被漏掉的；新增卡牌时这张表必须一起补。
+    assert set(expected) == set(CARDS) - {"dodge"}
+
+
 def test_intent_never_stalls_because_the_skill_resets_every_turn():
     """预演按"下回合开始"重置技能：只要它有技能，计划就不会是"按兵不动"。"""
     for hero_key in ("warrior", "mage", "ranger"):
@@ -1441,14 +1502,50 @@ def test_intent_reports_conditional_damage():
 
 
 def test_threat_estimate_accounts_for_the_execute_ceiling():
+    """处决的翻倍看的是"被打的人"——也就是电脑自己，不是玩家自己。"""
     battle = battle_with_a_dangerous_enemy()
-    # 满血玩家：上界仍是火球 14。
-    assert estimate_player_threat(battle.enemy_observation()) == 14
+    battle.participants[Side.PLAYER].hero = HEROES["ranger"]  # 处决只在游侠牌组里
+    battle.enemy.max_hp = 27
+    battle.enemy.hp = 27
 
-    battle.player.max_hp = 24
-    battle.player.hp = 7
-    # 残血玩家：处决在斩杀区翻倍到 16，成为新的上界。
+    # 电脑满血：游侠牌组里最狠的一刀是重击 10，处决只吃基础 8。
+    assert estimate_player_threat(battle.enemy_observation()) == CARDS["heavy_strike"].value
+
+    # 27 的 30% 线是 8.1：电脑 7 血进斩杀区，处决翻倍到 16，成为新的上界。
+    battle.enemy.hp = 7
     assert estimate_player_threat(battle.enemy_observation()) == 16
+
+
+def test_threat_estimate_ignores_the_player_own_wounds():
+    """反向也要钉住：玩家自己残血不会抬高他打出的威胁。"""
+    battle = battle_with_a_dangerous_enemy()
+    battle.participants[Side.PLAYER].hero = HEROES["ranger"]
+    battle.player.max_hp = 27
+    battle.player.hp = 3
+    battle.enemy.hp = battle.enemy.max_hp
+
+    # 玩家自己进了斩杀区，但他打的是满血电脑：处决不翻倍。
+    assert estimate_player_threat(battle.enemy_observation()) == CARDS["heavy_strike"].value
+
+
+def test_hard_lookahead_counts_the_execute_ceiling_over_a_shield():
+    """残血 + 有盾不等于安全：旧口径给 14 就放行，真上界 16 时必须转防守。"""
+    battle = make_battle()
+    battle.participants[Side.PLAYER].hero = HEROES["ranger"]  # 处决只在游侠牌组里
+    battle.enemy.max_hp = 28
+    battle.enemy.hp = 8  # 28 的 30% 线是 8.4：进斩杀区，处决翻倍到 16
+    battle.enemy.shield = 8  # 8 + 8 = 16：挡得住火球 14，挡不住处决 16
+    battle.enemy_hand = [{"id": "enemy-slash", "key": "slash"}]
+    observation = battle.enemy_observation()
+    slash = next(
+        candidate
+        for candidate in get_available_enemy_actions(observation)
+        if candidate.card_id == "enemy-slash"
+    )
+
+    assert estimate_player_threat(observation) == 16
+    # 16 ≤ 16：这一刀下去没命，非防御动作必须被扣分。
+    assert hard_lookahead_adjustment(observation, slash) < 0
 
 
 def test_ai_estimated_damage_matches_the_settlement():
