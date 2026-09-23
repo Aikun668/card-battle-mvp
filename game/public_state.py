@@ -1,6 +1,13 @@
 from game.ai import EnemyIntent, estimate_enemy_intent
-from game.battle import BattleState
-from game.catalog import CARDS, EXHAUST_KEYS, SKILL_COST
+from game.battle import ROUND_LIMIT, BattleState
+from game.catalog import (
+    CARD_TEXTS,
+    CARDS,
+    EXHAUST_KEYS,
+    HERO_DESCRIPTIONS,
+    SKILL_COST,
+    hero_deck_summary,
+)
 from game.models import (
     BattlePhase,
     CardDefinition,
@@ -22,7 +29,24 @@ def _hero_to_dict(hero: HeroDefinition) -> dict:
     }
 
 
-def _card_to_dict(card: CardDefinition) -> dict:
+def hero_catalog_entry(hero: HeroDefinition) -> dict:
+    """目录接口 /api/heroes 的完整条目：在精简英雄信息上补描述与卡组汇总。
+
+    对局公开状态里的 hero 子对象保持精简——同一份数据不在每个响应里重复膨胀。
+    """
+    return {
+        **_hero_to_dict(hero),
+        "description": HERO_DESCRIPTIONS[hero.key],
+        "deck": hero_deck_summary(hero.key),
+    }
+
+
+def card_to_dict(card: CardDefinition) -> dict:
+    """一张卡牌的公开定义：目录接口、手牌、装备槽、移除区共用同一形状。
+
+    text 是后端生成的效果文案（见 catalog._card_text），前端直接展示，
+    不自己拼规则数字。
+    """
     return {
         "key": card.key,
         "name": card.name,
@@ -30,6 +54,7 @@ def _card_to_dict(card: CardDefinition) -> dict:
         "effect_type": card.effect_type,
         "value": card.value,
         "exhaust": card.key in EXHAUST_KEYS,
+        "text": CARD_TEXTS[card.key],
     }
 
 
@@ -47,7 +72,46 @@ def _slot_to_dict(slot: CardDefinition | None) -> dict | None:
     """装备槽里挂着的牌；空槽也要给出 None，两个槽位的键才永远存在。"""
     if slot is None:
         return None
-    return _card_to_dict(slot)
+    return card_to_dict(slot)
+
+
+def _result_to_dict(battle: BattleState) -> dict | None:
+    """终局结果；未结束时是 None（键始终存在，前端可以无条件读）。
+
+    reason 区分四条收尾路径：kill（击倒）/ hp（10 回合结算血多）/
+    shield（血量相同、护盾更厚）/ draw（完全平局）。
+    """
+    if not battle.is_finished():
+        return None
+    if battle.phase is BattlePhase.DRAW:
+        return {
+            "winner": None,
+            "reason": "draw",
+            "text": f"达到 {ROUND_LIMIT} 回合上限，双方生命值与护盾相同，本局平局",
+        }
+    winner = "player" if battle.phase is BattlePhase.VICTORY else "enemy"
+    if battle.player.hp <= 0 or battle.enemy.hp <= 0:
+        return {
+            "winner": winner,
+            "reason": "kill",
+            "text": (
+                "你击败了对手，本局获胜"
+                if winner == "player"
+                else "你被电脑击败，本局失败"
+            ),
+        }
+    # 走到这里只可能是 10 回合结算：先比生命值、再比护盾，与结算规则一致。
+    if battle.player.hp != battle.enemy.hp:
+        reason, subject = "hp", "生命值更高"
+    else:
+        reason, subject = "shield", "护盾更厚"
+    owner = "你" if winner == "player" else "电脑"
+    outcome = "本局获胜" if winner == "player" else "本局失败"
+    return {
+        "winner": winner,
+        "reason": reason,
+        "text": f"达到 {ROUND_LIMIT} 回合上限，{owner}{subject}，{outcome}",
+    }
 
 
 def _intent_to_dict(intent: EnemyIntent) -> dict:
@@ -98,7 +162,7 @@ def public_battle_state(battle: BattleState) -> dict:
     player_state = {
         **_side_to_dict(battle.participant(Side.PLAYER)),
         "hand": [
-            {"id": card["id"], **_card_to_dict(CARDS[card["key"]])}
+            {"id": card["id"], **card_to_dict(CARDS[card["key"]])}
             for card in battle.hand
         ],
     }
@@ -139,5 +203,7 @@ def public_battle_state(battle: BattleState) -> dict:
                 "pass": player_is_defending,
             },
         },
+        # 终局结果；未结束时为 None。与 phase 同时给出，结果页直接读。
+        "result": _result_to_dict(battle),
         "log": list(battle.log),
     }

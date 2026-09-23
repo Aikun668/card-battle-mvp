@@ -136,3 +136,70 @@ HERO_DECKS: dict[str, list[str]] = {
         "execute",
     ],
 }
+
+# 三位英雄的打法说明：选人页直接展示的文案，来源在后端，前端不自己编。
+HERO_DESCRIPTIONS: dict[str, str] = {
+    "warrior": "牌多血厚，靠护盾和治疗把对局拖长",
+    "mage": "三张火球抢速度，能量够就能连出高伤害",
+    "ranger": "八张 1 费斩击配长剑，最容易一回合连打",
+}
+
+
+def hero_deck_summary(hero_key: str) -> list[dict]:
+    """按牌组里的首次出现顺序汇总"每种牌几张"，给选人页直接展示。"""
+    counts: dict[str, int] = {}
+    for key in HERO_DECKS[hero_key]:
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        {"key": key, "name": CARDS[key].name, "count": count}
+        for key, count in counts.items()
+    ]
+
+
+def _card_text(card: CardDefinition) -> str:
+    """一张牌可直接展示的效果文案；数值全部从卡牌定义与规则常量生成。
+
+    文案是给玩家看的规则说明：前端只负责展示，不拼数字。改数值时文案自动跟随，
+    避免手写文案和真实结算两处走样。
+    """
+    if card.effect_type == "dodge":
+        return "只能用于响应：抵消一次伤害"
+    if card.effect_type == "equip":
+        if card.key == "longsword":
+            boosted = "、".join(
+                CARDS[key].name for key in sorted(LONGSWORD_BOOST_KEYS)
+            )
+            return (
+                f"装备到武器槽：每回合第一次使用{boosted}时"
+                f"额外造成 {card.value} 点伤害"
+            )
+        return f"装备到护甲槽：每回合第一次受到的伤害减少 {card.value} 点"
+    if card.effect_type == "charge":
+        return f"本回合不造成伤害：下回合额外获得 {card.value} 点能量"
+    if card.effect_type == "damage":
+        rule = CONDITIONAL_DAMAGE.get(card.key)
+        if rule is None:
+            text = f"造成 {card.value} 点伤害"
+        elif rule[0] == "target_shielded":
+            text = (
+                f"造成 {card.value} 点伤害；"
+                f"目标有护盾时改为 {card.value + int(rule[1])} 点"
+            )
+        else:
+            text = (
+                f"造成 {card.value} 点伤害；"
+                f"目标生命低于其最大生命的 {int(WOUNDED_HP_RATIO * 100)}% 时"
+                f"改为 {int(card.value * rule[1])} 点"
+            )
+        if card.key in EXHAUST_KEYS:
+            text += "；使用后从本局移除"
+        return text
+    if card.effect_type == "shield":
+        return f"获得 {card.value} 点护盾"
+    if card.effect_type == "heal":
+        return f"恢复 {card.value} 点生命值"
+    return ""
+
+
+# 卡牌 key → 效果文案；目录接口与对局公开状态里的卡牌定义共用同一份。
+CARD_TEXTS: dict[str, str] = {key: _card_text(card) for key, card in CARDS.items()}

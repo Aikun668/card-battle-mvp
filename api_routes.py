@@ -3,9 +3,13 @@ import random
 from flask import Blueprint, jsonify, request, session
 
 from game.battle import BattleState
-from game.catalog import CARDS, EXHAUST_KEYS, HEROES
+from game.catalog import CARDS, HEROES
 from game.models import AIDifficulty, BattlePhase
-from game.public_state import public_battle_state
+from game.public_state import (
+    card_to_dict,
+    hero_catalog_entry,
+    public_battle_state,
+)
 from game.session_state import clear_battle, load_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
 
@@ -33,35 +37,11 @@ def create_api_blueprint() -> Blueprint:
 
     @api.get("/heroes")
     def heroes_catalog():
-        return response(
-            [
-                {
-                    "key": hero.key,
-                    "name": hero.name,
-                    "max_hp": hero.max_hp,
-                    "skill_name": hero.skill_name,
-                    "skill_type": hero.skill_type,
-                    "skill_value": hero.skill_value,
-                }
-                for hero in HEROES.values()
-            ]
-        )
+        return response([hero_catalog_entry(hero) for hero in HEROES.values()])
 
     @api.get("/cards")
     def cards_catalog():
-        return response(
-            [
-                {
-                    "key": card.key,
-                    "name": card.name,
-                    "cost": card.cost,
-                    "effect_type": card.effect_type,
-                    "value": card.value,
-                    "exhaust": card.key in EXHAUST_KEYS,
-                }
-                for card in CARDS.values()
-            ]
-        )
+        return response([card_to_dict(card) for card in CARDS.values()])
 
     @api.get("/game")
     def get_game():

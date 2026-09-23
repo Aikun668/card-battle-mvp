@@ -474,6 +474,7 @@ def test_public_state_shows_equipment_after_a_card_is_played(tmp_path):
             "effect_type": "equip",
             "value": 2,
             "exhaust": False,
+            "text": "装备到武器槽：每回合第一次使用斩击时额外造成 2 点伤害",
         },
         "armor": None,
     }
