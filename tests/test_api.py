@@ -118,7 +118,11 @@ def test_create_game_returns_public_state_without_hidden_deck_data(tmp_path):
     # 电脑先手时创建可能停在响应窗口——那也是"等玩家决定"的合法状态。
     assert state["phase"] in ("PLAYER_TURN", "RESPONSE")
     assert state["round_number"] == 1
-    assert state["player"]["energy"] == 3
+    # 先手方第 1 个回合只有 2 点能量；后手正常 3 点。
+    if state["starting_side"] == "player":
+        assert state["player"]["energy"] == 2
+    else:
+        assert state["player"]["energy"] == 3
     assert len(state["player"]["hand"]) == 5
     assert all("name" in card and "cost" in card for card in state["player"]["hand"])
     assert "enemy_hand" not in state
@@ -130,7 +134,10 @@ def test_api_card_action_and_end_turn_return_updated_public_state(tmp_path):
     client = make_client(tmp_path)
     start_player_turn_battle(client, json={"hero_key": "warrior"})
     with client.session_transaction() as session:
-        side_state(session, "player")["hand"] = [{"id": "player-slash", "key": "slash"}]
+        player = side_state(session, "player")
+        player["hand"] = [{"id": "player-slash", "key": "slash"}]
+        # 本用例验证"出牌扣 1 点能量"，先给足 3 点（先手方首回合只有 2 点）。
+        player["combatant"]["energy"] = 3
         # 电脑先手时可能已经给自己叠了护盾、装上铁甲，先清掉才好验证伤害。
         enemy = side_state(session, "enemy")
         enemy["combatant"]["shield"] = 0
@@ -476,7 +483,8 @@ def test_public_state_shows_equipment_after_a_card_is_played(tmp_path):
 
 def test_public_state_shows_both_public_resources_but_not_enemy_hand(tmp_path):
     client = make_client(tmp_path)
-    # 先手由 RNG 决定，这里直接把玩家先手的开局写进 session，双方能量才都是 3。
+    # 先手由 RNG 决定，这里直接把玩家先手的开局写进 session。
+    # 先手方第 1 个回合只有 2 点能量，电脑（后手）是 3 点。
     with client.session_transaction() as session:
         save_battle(
             session,
@@ -486,7 +494,7 @@ def test_public_state_shows_both_public_resources_but_not_enemy_hand(tmp_path):
 
     state = client.get("/api/game").get_json()["data"]
 
-    assert state["player"]["energy"] == 3
+    assert state["player"]["energy"] == 2
     assert state["enemy"]["energy"] == 3
     assert state["player"]["hero"]["key"] == "mage"
     assert state["player"]["hero"]["name"] == "法师"

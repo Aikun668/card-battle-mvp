@@ -168,6 +168,10 @@ class BattleState:
         state.log.append(f"电脑选择角色：{enemy_hero.name}")
         for side in (Side.PLAYER, Side.ENEMY):
             state.draw_cards_for(side, STARTING_HAND)
+        # 先手优势修正：先手方第 1 个回合只有 2 点能量（后手正常 3 点）。
+        # 两条路径都在这一行覆盖——player 先手时它就是玩家看到的开局；
+        # enemy 先手时它正好落在 create 内跑掉的那一回合上。
+        state.participant(first_side).combatant.energy = STARTING_ENERGY - 1
         if first_side is Side.ENEMY:
             # 电脑先手时在创建流程里把它这一回合推到"需要玩家决定的点"为止：
             # 要么回合跑完（返回玩家回合），要么停在响应窗口等调用方转交玩家。

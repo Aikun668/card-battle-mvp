@@ -71,7 +71,11 @@ def test_acceptance_walk_through():
         assert 0 < player["combatant"]["hp"] <= player["combatant"]["max_hp"]
         assert enemy["hero_key"] in HEROES
         assert enemy["combatant"]["hp"] == enemy["combatant"]["max_hp"]
-        assert player["combatant"]["energy"] == 3
+        # 先手方第 1 个回合只有 2 点能量；后手正常 3 点。
+        if s["battle"]["starting_side"] == "player":
+            assert player["combatant"]["energy"] == 2
+        else:
+            assert player["combatant"]["energy"] == 3
         assert len(player["hand"]) == 5
 
     # 停在响应窗口时逐次放弃，把行动权交回玩家（场景 4 需要玩家回合）。
@@ -85,7 +89,10 @@ def test_acceptance_walk_through():
 
     # Scenario 4 — normal card play
     with client.session_transaction() as s:
-        side_state(s, "player")["hand"] = [{"id": "p-s", "key": "slash"}]
+        player = side_state(s, "player")
+        player["hand"] = [{"id": "p-s", "key": "slash"}]
+        # 本场景验证"打牌扣 1 点能量"，先给足 3 点（先手方首回合只有 2 点）。
+        player["combatant"]["energy"] = 3
         enemy = side_state(s, "enemy")
         # 电脑先手时可能已经叠过护盾、装上铁甲，先清掉才能验证伤害。
         enemy["combatant"]["shield"] = 0
@@ -134,9 +141,9 @@ def test_acceptance_walk_through():
         s["battle"]["round_number"] = 1
         player = side_state(s, "player")
         enemy = side_state(s, "enemy")
-        # 电脑也能用英雄技能了。把它固定成满血战士（8 点护盾技能，评分 8 低于斩击的 9），
+        # 电脑也能用英雄技能了。把它固定成满血战士（7 点护盾技能，评分 7 低于斩击的 9），
         # 中等难度取分数最高的两个候选时它永远进不了池子，出牌顺序只由这三张斩击决定。
-        # 一旦电脑掉血，风险系数会把护盾技能抬到斩击之上，这里就不能再固定顺序了。
+        # RISK_WEIGHT=0 之后失血也不会把护盾技能抬到斩击之上，这个顺序是稳定的。
         enemy["hero_key"] = "warrior"
         enemy["combatant"]["max_hp"] = 32
         enemy["combatant"]["hp"] = 32
@@ -146,8 +153,14 @@ def test_acceptance_walk_through():
             {"id": "e-s3", "key": "slash"},
         ]
         # 清空电脑的牌区，它这一回合就补不到新牌，手牌固定为上面三张。
+        # 创建时电脑先手的开局可能已经给它装上长剑/铁甲——摘掉，
+        # 三张斩击的伤害才会是确定的 6×3。
         enemy["draw_pile"] = []
         enemy["discard_pile"] = []
+        enemy["weapon"] = None
+        enemy["armor"] = None
+        enemy["weapon_used_this_turn"] = False
+        enemy["armor_used_this_turn"] = False
         enemy["combatant"]["shield"] = 0
         player["combatant"]["shield"] = 0
         player["combatant"]["hp"] = 32

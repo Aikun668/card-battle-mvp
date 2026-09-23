@@ -32,9 +32,12 @@ def withhold_enemy_skill(battle):
 
 def make_battle():
     # 电脑也有英雄技能了，下面这些用例考的是普通牌评分，先把技能隔离掉。
-    return withhold_enemy_skill(
+    # 先手方首回合只有 2 点能量，这里补回满：用例测的是"正常回合"的评分。
+    battle = withhold_enemy_skill(
         BattleState.create("warrior", random.Random(3), starting_side=Side.PLAYER)
     )
+    battle.player.energy = 3
+    return battle
 
 
 def battle_with_enemy_hero(hero_key):
@@ -214,7 +217,8 @@ def test_existing_shield_makes_further_shield_score_below_attack():
     assert ranked[0].card_id == "slash"
 
 
-def test_actual_healing_outranks_plain_attack_when_hurt_and_no_kill_exists():
+def test_healing_is_priced_by_restored_health_not_by_wounds():
+    """RISK_WEIGHT = 0：失血本身不抬高治疗分，治疗按实际恢复量计价。"""
     battle = make_battle()
     battle.enemy.hp = 10
     battle.player.hp = battle.player.max_hp
@@ -222,8 +226,9 @@ def test_actual_healing_outranks_plain_attack_when_hurt_and_no_kill_exists():
         {"id": "heal", "key": "heal"},
         {"id": "slash", "key": "slash"},
     ]
-    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
-    assert ranked[0].card_id == "heal"
+    scores = enemy_scores(battle)
+    assert scores["heal"] == 6
+    assert scores["slash"] > scores["heal"]
 
 
 def test_attack_that_punches_through_shield_beats_a_fully_absorbed_one():
@@ -256,6 +261,7 @@ def test_enemy_keeps_attacking_a_heavily_shielded_player_instead_of_stalling():
 
 
 def test_a_dying_enemy_defends_instead_of_trading_damage():
+    """濒死时的防守由威胁预判（困难模式）负责，不是"失血自动转防守"。"""
     battle = make_battle()
     battle.enemy.hp = 6
     battle.player.hp = battle.player.max_hp
@@ -263,7 +269,7 @@ def test_a_dying_enemy_defends_instead_of_trading_damage():
         {"id": "fireball", "key": "fireball"},
         {"id": "heal", "key": "heal"},
     ]
-    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.MEDIUM)
+    ranked = rank_enemy_actions(battle.enemy_observation(), AIDifficulty.HARD)
     assert ranked[0].card_id == "heal"
 
 
@@ -943,7 +949,8 @@ def test_weapon_scores_nothing_when_there_is_no_slash_to_go_with_it():
     )
 
 
-def test_armor_is_worth_more_when_the_enemy_is_hurt():
+def test_armor_is_priced_by_mitigation_not_by_wounds():
+    """RISK_WEIGHT = 0：铁甲分不随失血漂移，它就是每回合 2 点减伤的投资。"""
     def armor_score(battle):
         return enemy_scores(battle)["enemy-armor"]
 
@@ -957,7 +964,7 @@ def test_armor_is_worth_more_when_the_enemy_is_hurt():
     hurt.enemy_hand = [{"id": "enemy-armor", "key": "iron_armor"}]
 
     assert armor_score(healthy) == CARDS["iron_armor"].value
-    assert armor_score(hurt) > armor_score(healthy)
+    assert armor_score(hurt) == armor_score(healthy)
 
 
 def test_weapon_raises_the_score_of_a_slash_but_not_of_a_fireball():

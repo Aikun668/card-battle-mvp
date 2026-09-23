@@ -7,7 +7,14 @@ from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
 def make_battle(hero_key="warrior"):
-    return BattleState.create(hero_key, random.Random(7), starting_side=Side.PLAYER)
+    """中局行为的测试脚手架：把先手方（这里固定是玩家）首回合能量补满。
+
+    真实规则里先手方第 1 个回合只有 2 点能量；这些用例测的是那之后的行为。
+    对"新对局本身"的断言请直接用 BattleState.create。
+    """
+    battle = BattleState.create(hero_key, random.Random(7), starting_side=Side.PLAYER)
+    battle.player.energy = 3
+    return battle
 
 
 def withhold_enemy_skill(battle):
@@ -30,12 +37,13 @@ def run_out_the_round_limit(battle):
     battle.resolve_enemy_turn()
 
 
-def test_new_battle_has_five_cards_three_energy_and_player_turn():
-    battle = make_battle()
+def test_new_battle_has_five_cards_two_energy_and_a_player_turn():
+    """先手方（这里是玩家）第 1 个回合只有 2 点能量；起手 5 张。"""
+    battle = BattleState.create("warrior", random.Random(7), starting_side=Side.PLAYER)
     assert battle.phase is BattlePhase.PLAYER_TURN
     assert battle.player.hp == 32
     assert battle.enemy.hp == battle.enemy_hero.max_hp
-    assert battle.player.energy == 3
+    assert battle.player.energy == 2
     assert len(battle.hand) == 5
     assert battle.round_number == 1
 
@@ -146,6 +154,23 @@ def test_enemy_opening_response_window_is_left_to_the_player():
         assert battle.player.energy == 3
         return
     raise AssertionError("200 个种子里没有出现电脑先手且停在响应窗口的开局")
+
+
+def test_the_first_mover_opens_with_two_energy():
+    """先手优势修正：先手方第 1 个回合只有 2 点能量，后手正常 3 点。
+
+    两条路径都要覆盖——玩家先手时这是玩家看到的开局；电脑先手时它正好
+    用在 create 内跑掉的那一回合上，玩家（后手）拿到的是正常的 3 点。
+    """
+    player_first = BattleState.create(
+        "warrior", random.Random(7), starting_side=Side.PLAYER
+    )
+    assert player_first.player.energy == 2
+
+    enemy_first = BattleState.create(
+        "warrior", random.Random(7), starting_side=Side.ENEMY
+    )
+    assert enemy_first.player.energy == 3
 
 
 def test_each_side_shuffles_its_own_hero_deck():
