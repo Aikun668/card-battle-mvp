@@ -1,0 +1,172 @@
+# 本地双人热座（PvP）实施计划（2026-09-23）
+
+## 背景与目标
+
+老师强调"对抗性"，而当前游戏只有"人对 AI"。本计划把双人模式做成**与"人机对战"并列的主要选项**：
+
+- **目标**：同一台设备、两个人轮流操作，一人打一边（真人对真人，热座模式）；
+- **入口**：开始页并列「人机对战 / 双人对战」两个主选项，双人不是彩蛋功能；
+- **非目标（本轮不做）**：联网对战、双设备、观战、人机混合组队、AI 接管空座位。
+
+## 为什么成本低（现状基础）
+
+「人机完全对等」已完成，规则层早就"座位无关"：
+
+- 动作接口全部座位化：`play_card_for(side)`、`use_skill_for(side)`、`end_turn_for(side)`、`respond_for(side)`；
+- 双方同英雄池、同卡组、同能量、同响应窗口——**AI 只是"替一个座位决策"的外壳**；
+- 契约 v1 已于 2026-09-23 冻结，本计划的接口改动**全部是加法**（新键、可选参数、新错误码）。
+
+双人要做的只有一层：**"这个座位由谁操作"**。
+
+## 设计总览
+
+### 1. 模式字段
+
+- `BattleState.mode`：`"pve"`（默认）/ `"pvp"`；
+- 判定辅助 `is_human_side(side)`：pvp 下两个座位都是人；pve 下仅 `player`；
+- 存档兼容：旧 session 没有 `mode` 字段 → 按 `"pve"` 读（沿用现有迁移风格）。
+- 公开状态顶层新增 `mode`，前端据此决定是否启用交接屏。
+
+### 2. 操作权：`seat` 参数
+
+- 动作接口请求体加**可选** `seat`（`"player"` 默认 / `"enemy"`）——旧的 pve 调用零改动；
+- `GET /api/game` 用 **query 参数**：`?seat=enemy`（GET 没有 body）；
+- 校验分两层：
+  - API 层：`seat` 值非法、或该座位由 AI 控制（pve 下的 `enemy`）→ `400 INVALID_SEAT`；
+  - 战斗层：轮到的是别的座位 → `422 ACTION_REJECTED`（沿用现有消息通道与状态回带）。
+
+### 3. 视角：`viewer`
+
+- 公开状态顶层新增 `viewer`（`"player"` / `"enemy"`），它同时决定三件事：
+  1. **手牌只在 viewer 一侧出现**——旧契约"`enemy` 永远没有 `hand`"精确化为
+     "只有 viewer 一侧带 `hand`"：
+     - pve：viewer 恒为 `player`，与现状**完全一致**；
+     - pvp：`?seat=enemy` 时 `enemy.hand` 出现、`player.hand` 消失；
+  2. **`available_actions` 按 viewer 计算**（"轮到 viewer 吗、viewer 能做什么"）；
+  3. **`response.active` = "viewer 是这次挂起攻击的防守方"**；`response` 新增 `attacker`
+     字段（前端可显示"对手/电脑对你使用【重击】"）。
+- `enemy.intent` 仅 PvE 的玩家回合有值；**pvp 恒为 `null`**（没有 AI 计划可预告）。
+
+### 4. phase：pvp 下 `ENEMY_TURN` 合法可见
+
+- pve："电脑回合永不外泄"（服务端跑完才返回）——**不变**；
+- pvp：`ENEMY_TURN` 表示"等座位 2 操作"，是正常的等待状态——前端据此显示交接屏；
+- `VICTORY / DEFEAT / DRAW` 的 winner 语义按座位（`player` = 座位 1 / 玩家 1）。
+
+### 5. AI 触发点收敛（pvp 时全部关闭）
+
+| 触发点 | pve（不变） | pvp |
+|---|---|---|
+| `create()` 电脑先手 | 服务端跑完开局回合（或停在 RESPONSE） | **不跑**，直接返回 `ENEMY_TURN` |
+| `end-turn` 后 | 自动跑 `resolve_enemy_turn()` | **不跑**，返回 `ENEMY_TURN` 等真人 |
+| 响应窗口（敌方被攻击） | 敌方由 AI 当场定夺 | **挂起等真人**（`RESPONSE` + `response.active`） |
+
+### 6. 日志与文案（共享日志必须中性）
+
+- 日志是**两边读同一份**，pvp 下不能用"你 / 电脑"：
+  - pve：完全不变（"你 / 电脑"）；
+  - pvp：中性称呼 **"玩家1 / 玩家2"**（座位 `player` = 玩家1）；
+- 战斗开始日志：pvp 为"玩家1选择角色：X / 玩家2选择角色：Y"；
+- 电脑参与者名字：pve 保持"电脑"；pvp 下用英雄名（与玩家侧对称）；
+- `result.text` 按模式生成（pvp："达到 10 回合上限，玩家1生命值更高，本局获胜"）；
+- "不是你的回合"提示同样按模式（pvp："现在不是你的回合"）。
+
+### 7. 创建对局（pvp）
+
+```json
+POST /api/game
+{ "mode": "pvp", "hero_key": "warrior", "opponent_hero_key": "mage" }
+```
+
+- `mode` 非法 → `422 INVALID_MODE`（新错误码，与 `INVALID_DIFFICULTY` 并列）；
+- `opponent_hero_key` 可选（省略则随机抽），非法 → `422 INVALID_HERO`；pve 下忽略；
+- 先手仍由 RNG 公平决定；**先手方第 1 回合 2 点能量**的修正对 pvp 同样生效；
+- pvp 下 `ai_difficulty` 字段仍然返回（契约恒在），但无实际作用，前端可忽略。
+
+### 8. 接口样例（供前端直接照抄）
+
+双人模式下一个完整来回的请求序列：
+
+```text
+POST /api/game            { "mode": "pvp", "hero_key": "warrior", "opponent_hero_key": "mage" }
+                          → data.mode="pvp", data.viewer="player", data.phase ∈ {PLAYER_TURN, ENEMY_TURN}
+
+# 玩家1 回合
+POST /api/game/actions/card     { "seat": "player", "card_id": "card-xxxx" }
+POST /api/game/actions/end-turn { "seat": "player" }
+                          → data.phase="ENEMY_TURN"（前端：显示交接屏）
+
+# 玩家2 回合（交接后）
+GET  /api/game?seat=enemy      → data.viewer="enemy", data.enemy.hand=[...], data.player 无 hand
+POST /api/game/actions/card     { "seat": "enemy", "card_id": "card-yyyy" }
+
+# 玩家2 打玩家1，玩家1 手里有闪避 → 挂起
+                          → data.phase="RESPONSE", data.response={active:false(玩家2视角), attacker:"enemy", ...}
+GET  /api/game?seat=player     → data.response.active=true（玩家1视角，显示响应面板）
+POST /api/game/actions/respond  { "seat": "player", "action": "dodge" }
+```
+
+## 前端对接清单（队友）
+
+**开始页**：
+
+- 模式选择：「人机对战 / 双人对战」并列主选项，传给 `POST /api/game` 的 `mode`；
+- 双人选英雄流程：玩家1 选英雄 → 交接屏（"请把设备交给玩家 2"）→ 玩家2 选英雄
+  → 用 `{ mode:"pvp", hero_key:玩家1, opponent_hero_key:玩家2 }` 开局。
+
+**对局中**：
+
+- 所有动作请求带 `seat`（当前由谁操作）；`GET /api/game?seat=` 取"当前操作者视角"；
+- 看到 `phase === "ENEMY_TURN"`（且 `mode === "pvp"`）→ 显示交接屏 → 切 `seat="enemy"` 继续；
+- 手牌**按 `viewer` 从对应块读**（不要写死 `state.player.hand`）：`state[state.viewer].hand`；
+- 响应面板读 `response.active`（viewer 语义）+ `response.attacker` 组织文案；
+- 日志直接展示（后端文案已按模式中性化，pvp 下是"玩家1/玩家2"）。
+
+## 实施步骤
+
+1. `game/battle.py`：`mode` 字段 + 标签 mode 化 + `create()` 参数 + 响应挂起条件 + 序列化；
+2. `game/public_state.py`：`viewer` 参数化（hand / available_actions / response / intent / result 文案）；
+3. `api_routes.py`：`mode` / `seat` / `opponent_hero_key` / 新错误码 `INVALID_SEAT`、`INVALID_MODE`；
+4. 测试：`tests/test_pvp.py` 新增 + 契约测试更新 + 全量回归；
+5. 契约文档增补（加法）+ 本计划归档验收读数。
+
+## 验收标准
+
+- **PvE 回归**：现有 282 项全绿，**pve 行为零变化**是硬标准；
+- **PvP 集成测试**覆盖：创建（两个英雄、先手两种方向）、seat 校验、交替操作、
+  敌方攻击挂起与真人响应、AI 全程不参与（日志无"电脑使用"）、两侧手牌互不可见、中性文案；
+- **契约**：新增字段 / 枚举 / 错误码全部进契约测试与文档。
+
+## 风险与决策点
+
+| 点 | 决定 | 备注 |
+|---|---|---|
+| 防偷看 | 界面层（交接屏）+ API 层（viewer 隔手牌）双重 | 同机不防 devtools，属热座惯例 |
+| 日志称呼 | pvp 用"玩家1 / 玩家2" | 团队有偏好可换 |
+| 电脑名字 | pvp 下 `enemy.name` 用英雄名 | pve 保持"电脑" |
+| 战绩记录 | pvp 照记（不改 SQLite 表结构） | 避免动数据库 |
+| demo 页 | 不动（保持 pve 联调） | 正式双人 UI 由前端分支实现 |
+
+## 演示方式（不依赖正式前端）
+
+- 同一浏览器两个标签（各自带 `seat`）→ 伪双屏对打；
+- 或单页交接屏（前端正式方案）；
+- 后端侧用集成测试/脚本走完整局演示。
+
+## 实施记录（2026-09-23，当日完工）
+
+**代码**：
+
+- `game/battle.py`：`mode` 字段与 `is_human_side`；三类日志标签方法（`actor_label` / `hit_label` / `side_label`，双人用"玩家1/玩家2"）；`create()` 加 keyword-only 的 `mode` / `opponent_hero_key`；响应挂起条件改为"防守方是真人就挂起"；`can_dodge` 通用化为 `can_respond_dodge(side)`（旧名保留为兼容别名）；`to_dict` / `from_dict` 带 `mode`（旧存档按 pve 读出）；
+- `game/public_state.py`：`public_battle_state(battle, viewer=Side.PLAYER)`；手牌只挂 viewer 一侧；`available_actions` / `response.active` 按 viewer 计算；`response` 加 `attacker`；顶层加 `mode` / `viewer`；`enemy.intent` 收窄为"仅人机模式的玩家回合"；`result.text` 按模式中性化；
+- `api_routes.py`：`resolve_seat()`（省略默认 player；值非法或 AI 座位 → `400 INVALID_SEAT`）；创建加 `mode`（非法 → `422 INVALID_MODE`）与 `opponent_hero_key`；`end-turn` 只在"对方座位由电脑控制"时自动跑回合。
+
+**测试**：
+
+- `tests/test_pvp.py` 新增 7 项：API 创建（双人、双双手工）、第二座位先手的直接交回合、viewer 隔手牌、双方交替操作（AI 零参与）、真人防守的响应挂起与自主闪避、中性结果文案、seat 校验与回合归属；
+- 契约测试更新：`STATE_KEYS` 加 `mode`/`viewer`、`RESPONSE_KEYS` 加 `attacker`、新错误码断言；
+- **全量 289 passed**（旧 282 项回归全绿——pve 行为零变化）。
+
+**契约文档**：`docs/api-contract.md` 增补「双人热座（PvP）」章节 + 枚举总表（`mode`/`viewer`/`seat`）+ 错误码表（`INVALID_SEAT` / `INVALID_MODE`），全部为加法。
+
+**遗留（给前端）**：开始页模式选择与交接屏按「前端对接清单」实现；正式前端就绪前，演示可用两个浏览器窗口各带自己的 `seat`。

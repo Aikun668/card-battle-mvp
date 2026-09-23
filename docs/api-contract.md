@@ -41,7 +41,10 @@
 
 | 枚举 | 取值 | 出现位置 |
 |---|---|---|
-| `phase` | `PLAYER_TURN` / `RESPONSE` / `VICTORY` / `DEFEAT` / `DRAW` | 公开状态顶层 |
+| `phase` | `PLAYER_TURN` / `RESPONSE` / `VICTORY` / `DEFEAT` / `DRAW`（双人模式另有 `ENEMY_TURN`，见下） | 公开状态顶层 |
+| `mode` | `pve` / `pvp` | 公开状态顶层、创建请求 |
+| `viewer` | `player` / `enemy` | 公开状态顶层 |
+| `seat` | `player` / `enemy` | 动作请求体、`GET /api/game` 的 query 参数 |
 | `starting_side` | `player` / `enemy` | 公开状态顶层 |
 | `ai_difficulty` | `easy` / `medium` / `hard` | 公开状态顶层、创建请求 |
 | `winner` | `player` / `enemy` / `null` | `result` |
@@ -51,7 +54,10 @@
 | `intent.kind` | `attack` / `defend` / `heal` / `equip` / `charge` / `pass` | `enemy.intent` |
 | `intent.source` | `card` / `skill` / `none` | `enemy.intent` |
 
-`phase` 的说明：内部枚举里还有 `START`、`HERO_SELECTION`、`ENEMY_TURN`，但它们**不会出现在任何 API 响应里**——电脑回合永远在服务端跑完（中途最多停在 `RESPONSE` 等玩家决定）才返回。
+`phase` 的说明：内部枚举里还有 `START`、`HERO_SELECTION`，它们不会出现在任何 API 响应里。
+
+- **人机模式（`pve`）**：`ENEMY_TURN` 也不会外泄——电脑回合永远在服务端跑完（中途最多停在 `RESPONSE` 等玩家决定）才返回；
+- **双人模式（`pvp`）**：`ENEMY_TURN` **是正常的可见状态**，含义是"轮到座位 2 操作"，前端据此显示交接屏。
 
 ## 服务信息
 
@@ -154,11 +160,13 @@
 ### POST /api/game
 
 ```json
-{ "hero_key": "warrior", "ai_difficulty": "medium" }
+{ "hero_key": "warrior", "ai_difficulty": "medium", "mode": "pve" }
 ```
 
 - `hero_key`：必须是 `/api/heroes` 里的 key，否则 `422 INVALID_HERO`；
 - `ai_difficulty`：`easy` / `medium` / `hard`，省略为 `medium`，非法值 `422 INVALID_DIFFICULTY`；
+- `mode`：`pve`（默认，人机）或 `pvp`（本地双人热座），非法值 `422 INVALID_MODE`；
+- `opponent_hero_key`：仅 `pvp` 有意义——玩家2 选的英雄；省略则随机抽，非法值 `422 INVALID_HERO`；`pve` 下忽略；
 - 重复调用会**以新对局覆盖当前对局**（旧对局不保留）；
 - 先手由服务端 RNG 决定。电脑先手时，它的开局回合在创建流程里跑到"需要玩家决定的点"为止：返回 `PLAYER_TURN`（回合已跑完）、`RESPONSE`（有攻击等玩家响应，`response.active` 为 `true`）或终局——**永远不会返回 `ENEMY_TURN`**；
 - 玩家在 `RESPONSE` 下用 `POST /api/game/actions/respond` 响应（`dodge` 或 `pass`）；响应后电脑继续把回合跑完，最终回到 `PLAYER_TURN`。
@@ -167,10 +175,16 @@
 
 | 接口 | 请求体 | 备注 |
 |---|---|---|
-| `actions/card` | `{ "card_id": "card-xxxxxxxx" }` | `card_id` 是手牌元素里的 `id`（不是 `key`），缺字段 `400 INVALID_REQUEST` |
-| `actions/skill` | 无（空 body 即可） | |
-| `actions/end-turn` | 无（空 body 即可） | |
-| `actions/respond` | `{ "action": "dodge" }` 或 `{ "action": "pass" }` | 其它值 `400 INVALID_REQUEST` |
+| `actions/card` | `{ "card_id": "card-xxxxxxxx", "seat": "player" }` | `card_id` 是手牌元素里的 `id`（不是 `key`），缺字段 `400 INVALID_REQUEST` |
+| `actions/skill` | `{ "seat": "player" }`（或空 body） | |
+| `actions/end-turn` | `{ "seat": "player" }`（或空 body） | |
+| `actions/respond` | `{ "action": "dodge", "seat": "player" }` 或 `{ "action": "pass", "seat": "player" }` | 其它 action 值 `400 INVALID_REQUEST` |
+
+`seat` 是**可选参数**（省略 = `player`，人机模式的旧调用行为零变化）：
+
+- 它声明"这次操作由哪个座位的人发出"；双人模式里玩家2 的操作必须带 `seat: "enemy"`；
+- 值非法、或该座位由电脑操作（人机模式的 `enemy`）→ `400 INVALID_SEAT`；
+- 座位合法、但轮到的是别人 → `422 ACTION_REJECTED`（`message` 说明原因，如"现在不是你的回合"）。
 
 ## 公开状态 schema
 
@@ -179,6 +193,8 @@
 ```json
 {
   "phase": "PLAYER_TURN",
+  "mode": "pve",
+  "viewer": "player",
   "round_number": 1,
   "starting_side": "player",
   "ai_difficulty": "medium",
@@ -233,7 +249,9 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `phase` | string | 见枚举总表；`RESPONSE` 表示有攻击挂起等玩家响应 |
+| `phase` | string | 见枚举总表；`RESPONSE` 表示有攻击挂起等响应，`ENEMY_TURN` 只在双人模式出现 |
+| `mode` | string | `pve` / `pvp`；前端据此决定是否启用交接屏 |
+| `viewer` | string | 这份状态是"给哪个座位看"的；同时决定手牌挂在谁那一侧 |
 | `round_number` | int | 当前回合数，1 起 |
 | `starting_side` | string | 本局先手方；先手方第 1 个回合只有 2 点能量 |
 | `ai_difficulty` | string | 本局难度 |
@@ -260,29 +278,34 @@
 
 | 键 | 出现位置 | 说明 |
 |---|---|---|
-| `hand` | 仅 `player` | 手牌，每项是 `id` + 卡牌定义（八字段） |
-| `intent` | 仅 `enemy` | 电脑下回合计划，见下节 |
+| `hand` | **仅 `viewer` 一侧** | 手牌，每项是 `id` + 卡牌定义（八字段） |
+| `intent` | 仅 `enemy`，且仅人机模式的玩家回合 | 电脑下回合计划，见下节；双人模式恒为 `null` |
 
-**电脑的手牌与抽牌堆不进入任何响应**——没有 `enemy.hand`、没有 `enemy_hand`、没有 `draw_pile` 这类键，前端也没有绕过途径。
+**对方的手牌与抽牌堆不进入任何响应**：人机模式下 `viewer` 恒为 `player`，所以 `enemy` 永远没有 `hand`（没有 `enemy.hand`、`enemy_hand`、`draw_pile` 这类键）；双人模式下 `?seat=enemy` 时反过来——手牌只挂在 `enemy` 一侧，`player` 一侧没有。
 
 ### response（响应窗口）
 
 | 字段 | 说明 |
 |---|---|
-| `active` | `true` 表示正等玩家对一次攻击做响应 |
-| `card_name` | 挂起攻击的牌名（如 `"重击"`）；无响应时为 `null` |
-| `damage` | 挂起攻击的伤害值；无响应时为 `0` |
+| `active` | `true` 表示**这份状态的 viewer** 需要响应这次攻击 |
+| `attacker` | 挂起攻击的发起方（`player` / `enemy`）；无挂起时为 `null` |
+| `card_name` | 挂起攻击的牌名（如 `"重击"`）；无挂起时为 `null` |
+| `damage` | 挂起攻击的伤害值；无挂起时为 `0` |
 | `dodge_cost` | 闪避的能量费用（恒为 1） |
+
+挂起本身是公开信息：攻击方视角下 `active` 为 `false`，但依然能读到 `attacker` / `card_name` / `damage`（用于显示"等待对手响应"）。
 
 ### available_actions
 
+所有字段回答的都是"**这份状态的 viewer** 现在能做什么"：
+
 | 字段 | 说明 |
 |---|---|
-| `play_card` | 玩家回合且未终局时可出牌 |
-| `use_skill` | 技能未用、能量足够且未终局 |
-| `end_turn` | 玩家回合且未终局 |
-| `respond.dodge` | 响应窗口里手里有闪避且能量够 |
-| `respond.pass` | 响应窗口里可以放弃响应 |
+| `play_card` | 轮到 viewer 且未终局时可出牌 |
+| `use_skill` | 轮到 viewer、技能未用、能量足够且未终局 |
+| `end_turn` | 轮到 viewer 且未终局 |
+| `respond.dodge` | viewer 是被挂起攻击的防守方、手里有闪避且能量够 |
+| `respond.pass` | viewer 是被挂起攻击的防守方 |
 
 ### result（终局结果）
 
@@ -306,8 +329,8 @@
 
 | 键 | 何时为 `null` / 空 |
 |---|---|
-| `player.hand` | 手牌为空时是 `[]` |
-| `enemy.intent` | 只在玩家回合有值；响应窗口、终局等其余时刻恒为 `null` |
+| `viewer` 一侧的 `hand` | 手牌为空时是 `[]`；非 viewer 一侧根本没有这个键 |
+| `enemy.intent` | 只在**人机模式的玩家回合**有值；其余时刻（含整个双人模式）恒为 `null` |
 | `enemy.equipment.weapon` / `.armor` | 没装备时 `null` |
 | `response.card_name` | 无响应时 `null` |
 | `result` | 非终局时 `null` |
@@ -332,6 +355,44 @@
 - `exhaust_pile` 的元素是 **card key 字符串**，不是卡牌定义对象；要显示中文名/图标时用 `/api/cards` 建立映射；
 - 装备牌不进弃牌堆，也不会出现在移除区。
 
+## 双人热座（PvP）
+
+同一台设备、两个人轮流操作，一人打一边。规则与人机模式完全相同（同卡组、同能量、同响应窗口），唯一区别是"敌方座位也由真人操作"——这个模式里没有 AI。
+
+### 创建
+
+```json
+POST /api/game
+{ "mode": "pvp", "hero_key": "warrior", "opponent_hero_key": "mage" }
+```
+
+- 先手仍由 RNG 公平决定，先手方第 1 回合 2 点能量的修正同样生效；
+- **没有电脑席位**：先手是座位 2 时，创建响应直接返回 `phase: "ENEMY_TURN"`（等人操作），不会有任何服务端跑回合；
+- `ai_difficulty` 字段仍然出现在状态里（契约恒在），双人下无实际作用，前端可忽略；
+- `enemy` 参与者的 `name` 是英雄名（人机模式保持"电脑"）。
+
+### 操作与视角
+
+- 动作请求带 `seat` 声明操作者；`GET /api/game?seat=` 取谁的视角（省略都是 `player`）；
+- 手牌只出现在 `viewer` 一侧——**API 层就不把对方手牌发给当前视角**；
+- `phase: "ENEMY_TURN"` = 轮到座位 2（前端显示交接屏）；`PLAYER_TURN` = 轮到座位 1；
+- 进攻方打出的伤害牌若防守方手里有闪避，会挂起 `RESPONSE` **等真人响应**（人机模式里电脑防守是当场定夺、不会挂起）——防守方视角 `response.active` 为 `true`，攻击方视角为 `false` 但能读到挂起信息。
+
+### 文案（共享内容必须中性）
+
+日志与 `result.text` 是两边读同一份，所以双人模式用中性称呼：座位 1 = "玩家1"，座位 2 = "玩家2"（人机模式继续用"你 / 电脑"）。前端自己的界面文案请按 `viewer` 组织（比如把 viewer 显示为"你"、对方显示为"对手"）。
+
+### 一个完整来回的请求序列
+
+```text
+POST /api/game                     { "mode": "pvp", "hero_key": "warrior", "opponent_hero_key": "mage" }
+POST /api/game/actions/card        { "seat": "player", "card_id": "card-xxxx" }
+POST /api/game/actions/end-turn    { "seat": "player" }          → phase = "ENEMY_TURN"（等玩家2）
+GET  /api/game?seat=enemy                                        → viewer="enemy"，手牌挂在 enemy 一侧
+POST /api/game/actions/card        { "seat": "enemy", "card_id": "card-yyyy" }
+POST /api/game/actions/respond     { "seat": "player", "action": "dodge" }    （若玩家1 被攻击且有闪避）
+```
+
 ## 错误格式与状态码
 
 | `error.code` | HTTP | 场景 |
@@ -340,6 +401,8 @@
 | `INVALID_HERO` | `422` | `hero_key` 不存在 |
 | `INVALID_DIFFICULTY` | `422` | 难度不是 `easy` / `medium` / `hard` |
 | `INVALID_REQUEST` | `400` | 请求字段缺失或格式错误（含非法的 respond action） |
+| `INVALID_MODE` | `422` | `mode` 不是 `pve` / `pvp` |
+| `INVALID_SEAT` | `400` | `seat` 值非法，或该座位由电脑操作（人机模式的 `enemy`） |
 | `ACTION_REJECTED` | `422` | 战斗规则拒绝本次操作（能量不足、不在手中、回合不对等） |
 
 `ACTION_REJECTED` 是唯一"失败但带状态"的情况：`data` 里带最新公开状态（形状同"公开状态 schema"），前端可以借此同步状态而不是再发一次 `GET`。
@@ -356,7 +419,7 @@
 
 1. **形状稳定**：本文档描述的所有键、类型、枚举由契约测试锁定；此后只有加法；
 2. **未知枚举降级**：未来新增 `effect_type` / `intent.kind` 等枚举成员时，前端用 `text` 兜底展示，不允许崩溃；
-3. **隐私边界**：`enemy` 永远不含手牌/抽牌堆/弃牌堆内容；
+3. **隐私边界**：任何响应只含 `viewer` 自己一侧的手牌（人机模式恒为玩家侧；双人模式取谁的视角就只有谁的手牌），对方的抽牌堆/弃牌堆内容永远不出现；
 4. **错误可展示**：`error.message` 是中文整句，可直接 toast；
 5. **状态可同步**：任何动作失败（`ACTION_REJECTED`）都能从 `data` 里拿到最新状态。
 
@@ -365,4 +428,4 @@
 - 不把模板页面继续扩展成正式前端；
 - 不让前端自行计算伤害、能量、AI 或胜负；
 - 不把电脑隐藏信息放进 API 响应；
-- 不增加多人、登录、抽卡或外部 AI 服务。
+- 不增加联网对战、登录、抽卡或外部 AI 服务；双人模式限定为**同一设备轮流操作**（本地热座），不做双设备、房间与观战。
