@@ -144,7 +144,7 @@ POST /api/game/actions/respond  { "seat": "player", "action": "dodge" }
 | 防偷看 | 界面层（交接屏）+ API 层（viewer 隔手牌）双重 | 同机不防 devtools，属热座惯例 |
 | 日志称呼 | pvp 用"玩家1 / 玩家2" | 团队有偏好可换 |
 | 电脑名字 | pvp 下 `enemy.name` 用英雄名 | pve 保持"电脑" |
-| 战绩记录 | pvp 照记（不改 SQLite 表结构） | 避免动数据库 |
+| 战绩记录 | pvp 照记（不改 SQLite 表结构） | 后果：`match_results` 表不分模式，用它统计"某英雄胜率"时会被双人对局污染；将来需要模式维度时应加列并回填 |
 | demo 页 | 不动（保持 pve 联调） | 正式双人 UI 由前端分支实现 |
 
 ## 演示方式（不依赖正式前端）
@@ -165,7 +165,7 @@ POST /api/game/actions/respond  { "seat": "player", "action": "dodge" }
 
 - `tests/test_pvp.py` 新增 7 项：API 创建（双人、双双手工）、第二座位先手的直接交回合、viewer 隔手牌、双方交替操作（AI 零参与）、真人防守的响应挂起与自主闪避、中性结果文案、seat 校验与回合归属；
 - 契约测试更新：`STATE_KEYS` 加 `mode`/`viewer`、`RESPONSE_KEYS` 加 `attacker`、新错误码断言；
-- **全量 289 passed**（旧 282 项回归全绿——pve 行为零变化）。
+- **全量 291 passed**（完工时为 289；提交前复核 R-01 补两条回归测试后为 291，见 [复核报告](2026-09-23-post-pvp-review.md)；旧 282 项回归全绿——pve 行为零变化）。
 
 **契约文档**：`docs/api-contract.md` 增补「双人热座（PvP）」章节 + 枚举总表（`mode`/`viewer`/`seat`）+ 错误码表（`INVALID_SEAT` / `INVALID_MODE`），全部为加法。
 

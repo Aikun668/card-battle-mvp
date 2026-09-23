@@ -41,7 +41,7 @@
 
 | 枚举 | 取值 | 出现位置 |
 |---|---|---|
-| `phase` | `PLAYER_TURN` / `RESPONSE` / `VICTORY` / `DEFEAT` / `DRAW`（双人模式另有 `ENEMY_TURN`，见下） | 公开状态顶层 |
+| `phase` | `PLAYER_TURN` / `ENEMY_TURN` / `RESPONSE` / `VICTORY` / `DEFEAT` / `DRAW`（`ENEMY_TURN` 仅双人模式，见下） | 公开状态顶层 |
 | `mode` | `pve` / `pvp` | 公开状态顶层、创建请求 |
 | `viewer` | `player` / `enemy` | 公开状态顶层 |
 | `seat` | `player` / `enemy` | 动作请求体、`GET /api/game` 的 query 参数 |
@@ -233,7 +233,7 @@
     "exhaust_pile": [],
     "intent": { "kind": "attack", "source": "card", "name": "重击", "value": 10, "text": "预计使用【重击】造成 10 点伤害" }
   },
-  "response": { "active": false, "card_name": null, "damage": 0, "dodge_cost": 1 },
+  "response": { "active": false, "attacker": null, "card_name": null, "damage": 0, "dodge_cost": 1 },
   "available_actions": {
     "play_card": true,
     "use_skill": false,
