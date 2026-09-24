@@ -100,7 +100,7 @@ class AIObservation:
 
 @dataclass(frozen=True)
 class ActionCandidate:
-    kind: Literal["card", "skill", "dodge", "pass"]
+    kind: Literal["card", "skill", "dodge", "negate", "pass"]
     card_id: str | None = None
     card_key: str | None = None
     score: float = 0.0

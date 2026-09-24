@@ -750,6 +750,69 @@ def test_response_candidates_are_only_dodge_and_pass():
     assert sorted(kinds) == ["dodge", "pass"]
 
 
+def battle_with_a_pending_play():
+    """把电脑摆进反制响应窗口：玩家打出一张装备，电脑有一次反制机会和 1 点能量。"""
+    battle = make_battle()
+    battle.pending_attack = PendingAttack(
+        attacker=Side.PLAYER,
+        defender=Side.ENEMY,
+        card_key="longsword",
+        card_name="长剑",
+        damage=0,
+        kind="play",
+    )
+    battle.participant(Side.ENEMY).negate_available = True
+    battle.enemy.energy = 1
+    return battle
+
+
+def test_negate_is_offered_when_the_chance_and_energy_are_available():
+    battle = battle_with_a_pending_play()
+
+    kinds = [
+        candidate.kind
+        for candidate in rank_enemy_responses(
+            battle.enemy_observation(), AIDifficulty.HARD
+        )
+    ]
+
+    # 反制分（6）压过空过（0.5），所以它在响应池里排第一。
+    assert kinds == ["negate", "pass"]
+
+
+def test_negate_is_withheld_without_the_chance_or_energy():
+    no_chance = battle_with_a_pending_play()
+    no_chance.participant(Side.ENEMY).negate_available = False
+    assert [
+        candidate.kind
+        for candidate in rank_enemy_responses(
+            no_chance.enemy_observation(), AIDifficulty.HARD
+        )
+    ] == ["pass"]
+
+    no_energy = battle_with_a_pending_play()
+    no_energy.enemy.energy = 0
+    assert [
+        candidate.kind
+        for candidate in rank_enemy_responses(
+            no_energy.enemy_observation(), AIDifficulty.HARD
+        )
+    ] == ["pass"]
+
+
+def test_hard_negates_a_play_it_can_afford():
+    battle = battle_with_a_pending_play()
+
+    kinds = {
+        choose_enemy_response(
+            battle.enemy_observation(), AIDifficulty.HARD, random.Random(seed)
+        ).kind
+        for seed in range(20)
+    }
+
+    assert kinds == {"negate"}
+
+
 def test_responding_does_not_peek_at_or_change_the_enemy_hand():
     battle = battle_with_a_pending_attack(10)
     before = battle.to_dict()
