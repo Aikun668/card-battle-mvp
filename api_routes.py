@@ -187,10 +187,10 @@ def create_api_blueprint() -> Blueprint:
             return error
         payload = request.get_json(silent=True) or {}
         action = payload.get("action")
-        if action not in {"dodge", "pass"}:
+        if action not in {"dodge", "negate", "pass"}:
             return error_response(
                 "INVALID_REQUEST",
-                "响应操作必须是 dodge 或 pass",
+                "响应操作必须是 dodge、negate 或 pass",
                 status=400,
             )
         seat, seat_error = resolve_seat(payload.get("seat"), battle)

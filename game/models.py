@@ -76,17 +76,26 @@ class ParticipantState:
     bonus_energy_next_turn: int = 0
     # 移除区：消耗牌打出后从本局移除，不进取牌堆，也洗不回来。
     exhaust_pile: list[str] = field(default_factory=list)
+    # 每局一次的反制机会：取消对手刚打出的装备 / 蓄力；用掉即本局失效。
+    # 它是场外资源、不占手牌——避免"往 16 张牌组里加牌"带来的稀释失衡。
+    negate_available: bool = True
 
 
 @dataclass(frozen=True)
 class PendingAttack:
-    """一次等待响应窗口的伤害攻击；费用与弃牌在挂起前就已经结清。"""
+    """一次等待响应窗口的事件；费用与弃牌在挂起前就已经结清。
+
+    kind 区分两类事件：
+    - "attack"：伤害攻击，防守方可以用闪避响应；
+    - "play"：可被反制的出牌（装备 / 蓄力），防守方可以用反制取消。
+    """
 
     attacker: Side
     defender: Side
     card_key: str
     card_name: str
     damage: int
+    kind: str = "attack"
 
 
 @dataclass

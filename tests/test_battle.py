@@ -6,14 +6,20 @@ from game.catalog import CARDS, HERO_DECKS, HEROES
 from game.models import AIDifficulty, BattlePhase, PendingAttack, Side
 
 
-def make_battle(hero_key="warrior"):
+def make_battle(hero_key="warrior", *, negate=False):
     """中局行为的测试脚手架：把先手方（这里固定是玩家）首回合能量补满。
 
     真实规则里先手方第 1 个回合只有 2 点能量；这些用例测的是那之后的行为。
     对"新对局本身"的断言请直接用 BattleState.create。
+
+    默认把双方的反制机会标记为已用（negate=False）：这些用例测的是装备 / 蓄力
+    的结算本身，不希望被"反制响应窗口"打断；专门测反制窗口的用例显式传 negate=True。
     """
     battle = BattleState.create(hero_key, random.Random(7), starting_side=Side.PLAYER)
     battle.player.energy = 3
+    if not negate:
+        for side in (Side.PLAYER, Side.ENEMY):
+            battle.participant(side).negate_available = False
     return battle
 
 
@@ -1262,7 +1268,11 @@ def test_random_play_stays_consistent_through_both_sides_responses():
             if battle.is_finished():
                 break
             if battle.phase is BattlePhase.RESPONSE:
-                battle.respond("dodge" if rng.random() < 0.5 else "pass")
+                # 挂起的事件有两类：伤害攻击用闪避响应，可被反制的出牌用反制响应。
+                if battle.pending_attack.kind == "play":
+                    battle.respond("negate" if rng.random() < 0.5 else "pass")
+                else:
+                    battle.respond("dodge" if rng.random() < 0.5 else "pass")
             else:
                 side = battle.current_side()
                 affordable = [

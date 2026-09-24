@@ -153,6 +153,8 @@ def _side_to_dict(participant: ParticipantState) -> dict:
         "bonus_energy_next_turn": participant.bonus_energy_next_turn,
         # 移除区同样是明牌：打出去就没了的东西，对面也算得清。
         "exhaust_pile": list(participant.exhaust_pile),
+        # 反制机会也是明牌：还剩没剩，双方都看得见。
+        "negate_available": participant.negate_available,
     }
 
 
@@ -204,7 +206,9 @@ def public_battle_state(battle: BattleState, viewer: Side = Side.PLAYER) -> dict
         "response": {
             # active 是"该我响应吗"。攻击方视角下依然能读到 attacker / 牌名 / 伤害
             # （挂起本身是公开信息），只是 active 为 false。
+            # kind 区分响应类型：attack（用闪避）或 play（用反制）。
             "active": viewer_is_defending,
+            "kind": pending_attack.kind if pending_attack else None,
             "attacker": pending_attack.attacker.value if pending_attack else None,
             "card_name": pending_attack.card_name if pending_attack else None,
             "damage": pending_attack.damage if pending_attack else 0,
@@ -221,6 +225,7 @@ def public_battle_state(battle: BattleState, viewer: Side = Side.PLAYER) -> dict
             "end_turn": is_viewer_turn and not battle.is_finished(),
             "respond": {
                 "dodge": battle.can_respond_dodge(viewer),
+                "negate": battle.can_respond_negate(viewer),
                 "pass": viewer_is_defending,
             },
         },

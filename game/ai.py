@@ -8,6 +8,7 @@ from game.catalog import (
     HERO_DECKS,
     HEROES,
     LONGSWORD_BOOST_KEYS,
+    NEGATE_COST,
     SKILL_COST,
     STARTING_ENERGY,
     conditional_damage,
@@ -36,6 +37,8 @@ WEAPON_EATERS_PER_TURN = 2
 DANGER_PENALTY = 100.0
 # 蓄力（1 费换下回合 +2 能量）的估值：草案固定值，与护盾牌同档，平衡轮再校准。
 CHARGE_SCORE = 6.0
+# 反制的估值：与装备 / 蓄力同档——抹掉对手一笔投资的价值。
+NEGATE_SCORE = 6.0
 
 DEFENSIVE_EFFECTS = frozenset({"shield", "heal"})
 
@@ -75,6 +78,7 @@ class PublicParticipantState:
     weapon_used_this_turn: bool = False
     armor_used_this_turn: bool = False
     bonus_energy_next_turn: int = 0
+    negate_available: bool = True
 
 
 @dataclass(frozen=True)
@@ -484,14 +488,46 @@ def score_dodge(observation: AIObservation) -> float:
     return saved * _risk_multiplier(own)
 
 
+def score_negate(observation: AIObservation) -> float:
+    """反制的估值（每局一次的场外机会）：取消对手一张装备 / 蓄力，
+    抹掉它那笔投资的全部价值。"""
+    return NEGATE_SCORE
+
+
+def _holds_affordable_response(observation: AIObservation, key: str) -> bool:
+    """这项响应现在能不能兑现：只有能兑现的候选才进响应池。
+
+    否则会出现"没反制却选反制"这类幻觉候选，执行时被战斗规则拒绝，回合卡在响应窗口。
+    闪避是手牌；反制是每局一次的场外机会，不占手牌。
+    """
+    own = observation.self_state
+    if key == "negate":
+        return own.negate_available and own.energy >= NEGATE_COST
+    if own.energy < CARDS[key].cost:
+        return False
+    return any(card["key"] == key for card in observation.own_hand)
+
+
 def rank_enemy_responses(
     observation: AIObservation, difficulty: AIDifficulty
 ) -> list[ActionCandidate]:
-    """响应窗口里电脑只有两个合法动作；分数与出牌共用同一套评分口径。"""
+    """响应窗口里的合法动作：分数与出牌共用同一套评分口径。
+
+    kind 决定可用什么：伤害攻击用闪避；可被反制的出牌（装备 / 蓄力）用反制。
+    """
+    pending = observation.pending_attack
     candidates = [
-        ActionCandidate(kind="dodge", score=score_dodge(observation)),
         ActionCandidate(kind="pass", score=score_pass(observation, difficulty)),
     ]
+    if pending is not None and pending.kind == "play":
+        if _holds_affordable_response(observation, "negate"):
+            candidates.append(
+                ActionCandidate(kind="negate", score=score_negate(observation))
+            )
+    elif _holds_affordable_response(observation, "dodge"):
+        candidates.append(
+            ActionCandidate(kind="dodge", score=score_dodge(observation))
+        )
     return sorted(candidates, key=lambda candidate: candidate.score, reverse=True)
 
 

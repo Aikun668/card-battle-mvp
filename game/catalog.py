@@ -2,6 +2,8 @@ from game.models import CardDefinition, HeroDefinition
 
 STARTING_ENERGY = 3
 SKILL_COST = 2
+# 反制（每局一次的场外机会）的能量费用。
+NEGATE_COST = 1
 
 HEROES: dict[str, HeroDefinition] = {
     "warrior": HeroDefinition("warrior", "战士", 32, "守护", "shield", 7),

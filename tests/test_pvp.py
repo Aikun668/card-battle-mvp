@@ -197,6 +197,7 @@ def test_pvp_enemy_attack_waits_for_the_real_defender(tmp_path):
     assert defender_view["response"]["active"] is True
     assert defender_view["available_actions"]["respond"] == {
         "dodge": True,
+        "negate": False,
         "pass": True,
     }
     hp_before = defender_view["enemy"]["hp"]

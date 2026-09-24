@@ -38,6 +38,10 @@ def make_battle():
         BattleState.create("warrior", random.Random(3), starting_side=Side.PLAYER)
     )
     battle.player.energy = 3
+    # 反制机会同样先隔离掉：这些用例测的是评分与流程本身，
+    # 装备 / 蓄力不该被"反制响应窗口"打断（反制专用用例会显式打开）。
+    for side in (Side.PLAYER, Side.ENEMY):
+        battle.participant(side).negate_available = False
     return battle
 
 
@@ -857,6 +861,8 @@ def test_the_observation_types_have_nowhere_to_put_the_opponent_hand_or_deck():
         "weapon_used_this_turn",
         "armor_used_this_turn",
         "bonus_energy_next_turn",
+        # 反制机会是双方都看得见的资源，所以它属于公开状态。
+        "negate_available",
     }
     assert {field.name for field in fields(AIObservation)} == {
         "self_state",

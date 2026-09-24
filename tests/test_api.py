@@ -380,6 +380,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
     assert paused["player"]["energy"] == 2
     assert paused["response"] == {
         "active": True,
+        "kind": "attack",
         "attacker": "enemy",
         "card_name": "重击",
         "damage": 10,
@@ -387,6 +388,7 @@ def test_api_pauses_enemy_attack_and_accepts_dodge_response(tmp_path):
     }
     assert paused["available_actions"]["respond"] == {
         "dodge": True,
+        "negate": False,
         "pass": True,
     }
 
@@ -459,6 +461,9 @@ def test_public_state_shows_equipment_after_a_card_is_played(tmp_path):
         side_state(session, "player")["hand"] = [
             {"id": "player-longsword", "key": "longsword"}
         ]
+        # 这个用例测"出装备后的公开状态"：把对手的反制机会标记为已用，
+        # 避免装备挂在响应窗口里（反制窗口本身由专门用例覆盖）。
+        side_state(session, "enemy")["negate_available"] = False
         session.modified = True
 
     response = client.post(

@@ -51,6 +51,7 @@ SIDE_KEYS = {
     "equipment",
     "bonus_energy_next_turn",
     "exhaust_pile",
+    "negate_available",
 }
 CARD_KEYS = {"key", "name", "cost", "effect_type", "value", "exhaust", "text"}
 HERO_KEYS = {"key", "name", "max_hp", "skill_name", "skill_type", "skill_value"}
@@ -59,9 +60,9 @@ HAND_CARD_KEYS = CARD_KEYS | {"id"}
 SKILL_KEYS = {"name", "type", "value", "cost", "used_this_turn"}
 EQUIPMENT_KEYS = {"weapon", "armor"}
 INTENT_KEYS = {"kind", "source", "name", "value", "text"}
-RESPONSE_KEYS = {"active", "attacker", "card_name", "damage", "dodge_cost"}
+RESPONSE_KEYS = {"active", "kind", "attacker", "card_name", "damage", "dodge_cost"}
 ACTIONS_KEYS = {"play_card", "use_skill", "end_turn", "respond"}
-RESPOND_KEYS = {"dodge", "pass"}
+RESPOND_KEYS = {"dodge", "negate", "pass"}
 RESULT_KEYS = {"winner", "reason", "text"}
 ERROR_KEYS = {"code", "message"}
 ENVELOPE_KEYS = {"ok", "data", "error"}

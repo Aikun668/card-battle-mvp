@@ -15,6 +15,7 @@ from game.catalog import (
     HERO_DECKS,
     HEROES,
     LONGSWORD_BOOST_KEYS,
+    NEGATE_COST,
     SKILL_COST,
     STARTING_ENERGY,
     conditional_damage,
@@ -55,6 +56,10 @@ PVP_SIDE_LABEL = {Side.PLAYER: "玩家1", Side.ENEMY: "玩家2"}
 
 PVE_MODE = "pve"
 PVP_MODE = "pvp"
+
+# 等待响应窗口的事件类型（见 PendingAttack.kind）。
+PENDING_ATTACK = "attack"
+PENDING_PLAY = "play"
 
 
 def _normalized_mode(raw: object) -> str:
@@ -308,6 +313,13 @@ class BattleState:
         participant.hand.pop(index)
         if definition.effect_type == "equip":
             # 装备是第四个牌区：留在槽里跨回合生效，不进弃牌堆。
+            # 反制会取消它：对手有可用反制时先挂起等响应；挂起期间牌先记在
+            # 弃牌堆里（与其他挂起事件同一口径），放行时再"升华"进槽——
+            # 这样任何时刻五个牌区加起来都正好是整副牌。
+            if self._has_available_negate(OPPONENT_SIDE[side]):
+                participant.discard_pile.append(definition.key)
+                self._open_negate_response(side, definition)
+                return ActionResult(True, "")
             self._equip(participant, definition)
             self.log.append(self._format_card_log(side, definition))
             return ActionResult(True, "")
@@ -320,6 +332,10 @@ class BattleState:
             # 费用与弃牌在挂起前就结清，响应窗口里只决定这次伤害落不落地。
             return self._open_response(side, definition)
         if definition.effect_type == "charge":
+            # 蓄力同样可被反制：对手有可用反制时先挂起等响应。
+            if self._has_available_negate(OPPONENT_SIDE[side]):
+                self._open_negate_response(side, definition)
+                return ActionResult(True, "")
             # 蓄力没有即时效果：把能量记到下个自己的回合。
             participant.bonus_energy_next_turn += definition.value
         else:
@@ -547,6 +563,14 @@ class BattleState:
             and self.participant(side).combatant.energy >= dodge.cost
         )
 
+    def _has_available_negate(self, side: Side) -> bool:
+        """每局一次的反制机会 + 1 点能量：可用才让装备 / 蓄力挂起等响应。"""
+        participant = self.participant(side)
+        return (
+            participant.negate_available
+            and participant.combatant.energy >= NEGATE_COST
+        )
+
     def can_respond_dodge(self, side: Side) -> bool:
         """这个座位现在能不能用闪避响应挂起的攻击。"""
         pending = self.pending_attack
@@ -561,6 +585,17 @@ class BattleState:
         """兼容旧调用：玩家一侧的闪避可用性（人机页面长期只问这一个座位）。"""
         return self.can_respond_dodge(Side.PLAYER)
 
+    def can_respond_negate(self, side: Side) -> bool:
+        """这个座位现在能不能用反制响应挂起的出牌（装备 / 蓄力）。"""
+        pending = self.pending_attack
+        return (
+            self.phase is BattlePhase.RESPONSE
+            and pending is not None
+            and pending.kind == PENDING_PLAY
+            and pending.defender is side
+            and self._has_available_negate(side)
+        )
+
     def respond_for(self, side: Side, action: str) -> ActionResult:
         if self.is_finished():
             return ActionResult(False, "本局已经结束，请重新开始")
@@ -571,7 +606,11 @@ class BattleState:
             return ActionResult(False, "这次攻击不是针对你的")
         if action == "dodge":
             return self._dodge_pending_attack(side)
+        if action == "negate":
+            return self._negate_pending_play(side)
         if action == "pass":
+            if pending.kind == PENDING_PLAY:
+                return self._take_pending_play()
             return self._take_pending_attack()
         return ActionResult(False, "无效的响应操作")
 
@@ -580,6 +619,8 @@ class BattleState:
         return self.respond_for(Side.PLAYER, action)
 
     def _dodge_pending_attack(self, side: Side) -> ActionResult:
+        if self.pending_attack.kind != PENDING_ATTACK:
+            return ActionResult(False, "这次出牌不能用闪避响应")
         participant = self.participant(side)
         dodge = CARDS["dodge"]
         index = self._find_dodge_index(side)
@@ -657,6 +698,26 @@ class BattleState:
             self._resolve_enemy_response()
         return ActionResult(True, "")
 
+    def _open_negate_response(
+        self, attacker: Side, definition: CardDefinition
+    ) -> None:
+        """装备 / 蓄力打出后：对手手里有可用反制，挂起等它决定取不取消。
+
+        费用与弃牌在挂起前已经结清；效果本身要等放行（pass）才落地。
+        """
+        defender = OPPONENT_SIDE[attacker]
+        self.pending_attack = PendingAttack(
+            attacker=attacker,
+            defender=defender,
+            card_key=definition.key,
+            card_name=definition.name,
+            damage=0,
+            kind=PENDING_PLAY,
+        )
+        self.phase = BattlePhase.RESPONSE
+        if not self.is_human_side(defender):
+            self._resolve_enemy_response()
+
     def _resolve_damage(
         self, attacker: Side, definition: CardDefinition, damage: int
     ) -> None:
@@ -668,6 +729,50 @@ class BattleState:
         pending = self.pending_attack
         # 用挂起时的伤害值，不能回查牌表：长剑加成只存在于这一份记录里。
         self._resolve_damage(pending.attacker, CARDS[pending.card_key], pending.damage)
+        return self._finish_response()
+
+    def _take_pending_play(self) -> ActionResult:
+        """放行：被挂起的装备 / 蓄力效果此刻落地。
+
+        装备牌在挂起时记在弃牌堆里，放行时从那里取出、放进装备槽；
+        蓄力牌打出时就已在弃牌堆，效果（能量结余）直接落地。
+        """
+        pending = self.pending_attack
+        definition = CARDS[pending.card_key]
+        participant = self.participant(pending.attacker)
+        if definition.effect_type == "equip":
+            participant.discard_pile.remove(definition.key)
+            self._equip(participant, definition)
+        else:
+            participant.bonus_energy_next_turn += definition.value
+        self.log.append(self._format_card_log(pending.attacker, definition))
+        self._check_terminal()
+        return self._finish_response()
+
+    def _negate_pending_play(self, side: Side) -> ActionResult:
+        """反制：用掉每局一次的场外机会，取消对手刚打出的装备 / 蓄力。
+
+        费用与牌在打出时就已结清（和伤害牌同一口径），被反制的是"效果本身"。
+        机会是资源、不占手牌——用掉即本局失效。
+        """
+        pending = self.pending_attack
+        if pending.kind != PENDING_PLAY:
+            return ActionResult(False, "这次出牌不能用反制响应")
+        participant = self.participant(side)
+        if not participant.negate_available:
+            return ActionResult(False, "本局的反制机会已经用过了")
+        if participant.combatant.energy < NEGATE_COST:
+            shortage = NEGATE_COST - participant.combatant.energy
+            return ActionResult(False, f"能量不足，还差 {shortage} 点")
+        participant.combatant.energy -= NEGATE_COST
+        participant.negate_available = False
+        # 被取消的牌无需移动：装备牌挂起时就记在打出者的弃牌堆里，
+        # 蓄力牌打出时也已进弃牌堆——取消只是让效果不落地。
+        self.log.append(
+            f"{self.actor_label(pending.attacker)}"
+            f"使用【{pending.card_name}】"
+        )
+        self.log.append(f"{self.side_label(side)}使用【反制】，取消了本次效果")
         return self._finish_response()
 
     def _finish_response(self) -> ActionResult:
@@ -749,6 +854,7 @@ def _public_participant(participant: ParticipantState) -> PublicParticipantState
         weapon_used_this_turn=participant.weapon_used_this_turn,
         armor_used_this_turn=participant.armor_used_this_turn,
         bonus_energy_next_turn=participant.bonus_energy_next_turn,
+        negate_available=participant.negate_available,
     )
 
 
@@ -776,6 +882,7 @@ def _participant_to_payload(participant: ParticipantState) -> dict:
         "armor_used_this_turn": participant.armor_used_this_turn,
         "bonus_energy_next_turn": participant.bonus_energy_next_turn,
         "exhaust_pile": list(participant.exhaust_pile),
+        "negate_available": participant.negate_available,
     }
 
 
@@ -798,6 +905,7 @@ def _pending_attack_to_payload(pending: PendingAttack | None) -> dict | None:
         "card_key": pending.card_key,
         "card_name": pending.card_name,
         "damage": pending.damage,
+        "kind": pending.kind,
     }
 
 
@@ -811,6 +919,8 @@ def _pending_attack_from_payload(payload: dict | None) -> PendingAttack | None:
         card_key=payload["card_key"],
         card_name=payload["card_name"],
         damage=payload["damage"],
+        # 本次改动之前保存的挂起事件都是伤害攻击。
+        kind=payload.get("kind", PENDING_ATTACK),
     )
 
 
@@ -830,6 +940,8 @@ def _participant_from_payload(payload: dict) -> ParticipantState:
         # 本次改动之前保存的对局没有蓄力和移除区字段，读出 0 和空列表。
         bonus_energy_next_turn=int(payload.get("bonus_energy_next_turn", 0)),
         exhaust_pile=list(payload.get("exhaust_pile", [])),
+        # 该字段出现之前保存的对局按"反制机会还在"读出。
+        negate_available=bool(payload.get("negate_available", True)),
     )
 
 
