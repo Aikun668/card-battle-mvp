@@ -49,6 +49,8 @@
 | `ai_difficulty` | `easy` / `medium` / `hard` | 公开状态顶层、创建请求 |
 | `winner` | `player` / `enemy` / `null` | `result` |
 | `result.reason` | `kill` / `hp` / `shield` / `draw` | `result` |
+| `response.kind` | `attack` / `play` / `null` | `response`（挂起事件的类型） |
+| respond 的 `action` | `dodge` / `negate` / `pass` | `POST /api/game/actions/respond` |
 | `effect_type` | `damage` / `shield` / `heal` / `dodge` / `equip` / `charge` | 卡牌定义 |
 | `skill_type` | `shield` / `damage` / `damage_draw` | 英雄与技能 |
 | `intent.kind` | `attack` / `defend` / `heal` / `equip` / `charge` / `pass` | `enemy.intent` |
@@ -178,7 +180,7 @@
 | `actions/card` | `{ "card_id": "card-xxxxxxxx", "seat": "player" }` | `card_id` 是手牌元素里的 `id`（不是 `key`），缺字段 `400 INVALID_REQUEST` |
 | `actions/skill` | `{ "seat": "player" }`（或空 body） | |
 | `actions/end-turn` | `{ "seat": "player" }`（或空 body） | |
-| `actions/respond` | `{ "action": "dodge", "seat": "player" }` 或 `{ "action": "pass", "seat": "player" }` | 其它 action 值 `400 INVALID_REQUEST` |
+| `actions/respond` | `{ "action": "dodge", "seat": "player" }`、`{ "action": "negate", "seat": "player" }` 或 `{ "action": "pass", "seat": "player" }` | 其它 action 值 `400 INVALID_REQUEST` |
 
 `seat` 是**可选参数**（省略 = `player`，人机模式的旧调用行为零变化）：
 
@@ -273,6 +275,7 @@
 | `equipment` | `{ "weapon": 卡牌定义 \| null, "armor": 卡牌定义 \| null }`，两个键恒在 |
 | `bonus_energy_next_turn` | 蓄力结余，双方都看得见的明牌 |
 | `exhaust_pile` | 已移除的牌，**元素是 card key 字符串**（如 `["execute"]`）；显示中文名用 `/api/cards` 映射 |
+| `negate_available` | 反制机会是否还在（每局一次、双方都看得见的明牌），见"反制"节 |
 
 各自私有键：
 
@@ -288,7 +291,8 @@
 | 字段 | 说明 |
 |---|---|
 | `active` | `true` 表示**这份状态的 viewer** 需要响应这次攻击 |
-| `attacker` | 挂起攻击的发起方（`player` / `enemy`）；无挂起时为 `null` |
+| `kind` | 挂起事件的类型：`attack`（伤害攻击，用闪避响应）/ `play`（装备或蓄力，用反制响应）；无挂起时为 `null` |
+| `attacker` | 挂起事件的发起方（`player` / `enemy`）；无挂起时为 `null` |
 | `card_name` | 挂起攻击的牌名（如 `"重击"`）；无挂起时为 `null` |
 | `damage` | 挂起攻击的伤害值；无挂起时为 `0` |
 | `dodge_cost` | 闪避的能量费用（恒为 1） |
@@ -304,8 +308,9 @@
 | `play_card` | 轮到 viewer 且未终局时可出牌 |
 | `use_skill` | 轮到 viewer、技能未用、能量足够且未终局 |
 | `end_turn` | 轮到 viewer 且未终局 |
-| `respond.dodge` | viewer 是被挂起攻击的防守方、手里有闪避且能量够 |
-| `respond.pass` | viewer 是被挂起攻击的防守方 |
+| `respond.dodge` | viewer 是被挂起的**伤害攻击**的防守方、手里有闪避且能量够 |
+| `respond.negate` | viewer 是被挂起的**装备 / 蓄力出牌**的防守方、反制机会还在且能量够 |
+| `respond.pass` | viewer 是被挂起事件的防守方 |
 
 ### result（终局结果）
 
@@ -354,6 +359,17 @@
 - 卡牌定义的 `exhaust` 为 `true` 表示打出后从本局移除（不进弃牌堆、洗牌也回不来）；
 - `exhaust_pile` 的元素是 **card key 字符串**，不是卡牌定义对象；要显示中文名/图标时用 `/api/cards` 建立映射；
 - 装备牌不进弃牌堆，也不会出现在移除区。
+
+### 反制（每局一次）
+
+反制是**每局一次的场外机会**：不占手牌、不进牌组（避免改动牌组配比带来的连锁失衡）。
+当对手打出**装备或蓄力**时，你可以花 1 点能量取消它的效果（装备不进槽、蓄力不回能量）：
+
+- 双方各自拥有一次机会；`negate_available` 是公开字段——对手也算得清你还剩没有；
+- 这类事件挂起时 `response.kind` 为 `"play"`：`respond` 传 `"negate"` 取消、传 `"pass"` 放行；
+- 机会用掉即本局失效；不足 1 点能量或机会已用时不挂起，出牌直接生效；
+- 被取消的装备牌进打出者的弃牌堆（"打出过但没生效"）；蓄力牌打出时已进弃牌堆，取消只让效果不落地；
+- 伤害攻击不受影响（仍走闪避响应），两类响应通过 `response.kind` 区分。
 
 ## 双人热座（PvP）
 
