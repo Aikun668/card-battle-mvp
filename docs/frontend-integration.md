@@ -1,0 +1,253 @@
+# 前端对接文档
+
+> **用途**：这是一份"按页面照做"的字段说明书——每个要渲染的元素读哪个字段、值长什么样、边界怎么处理。
+> **权威顺序**：契约的唯一权威是 [api-contract.md](api-contract.md)；任务怎么排队看 [前端优先级构建计划](队友宏观计划/前端优先级构建计划.md)；
+> 本文把两者接上，并补上构建计划写完之后落地的两个增量：**双人热座** 与 **反制**。
+> **后端状态**：契约 v1 冻结（只做加法）+ 双人热座 + 反制（每局一次）已上线，`303 passed`，本地服务 `:5000`。
+
+---
+
+## 0. 三条铁律（先读，能省一天）
+
+1. **整份状态**：每一个响应的 `data` 都是**最新完整状态**——直接整体重渲染，不做增量合并、不缓存旧 DOM；动作被拒绝时（422）`data` 里也带最新状态，出错即同步。
+2. **权限在数据里**：按钮能不能点读 `available_actions`、要不要弹响应读 `response.active`——**前端不推断任何规则**（不自己算费用、不自己判断回合）。
+3. **字段恒在**：契约列过的键**任何时刻都存在**（值可能是 `null` / `0` / `[]`），可以无条件读，不用 `hasOwnProperty`。
+
+---
+
+## 1. 状态地图（一屏看全）
+
+### 1.1 顶层
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `phase` | string | `PLAYER_TURN` / `ENEMY_TURN`（仅双人）/ `RESPONSE` / `VICTORY` / `DEFEAT` / `DRAW` |
+| `mode` | string | `pve` / `pvp`——**决定是否启用交接屏** |
+| `viewer` | string | 这份状态给哪个座位看（`player` / `enemy`） |
+| `round_number` / `starting_side` / `ai_difficulty` | — | 回合数 / 先手方 / 难度 |
+| `player` / `enemy` | object | 双方公开块（见 1.2） |
+| `response` | object | 响应窗口（见 1.3） |
+| `available_actions` | object | 按钮可用性（见 1.4） |
+| `result` | object \| null | 终局结果，非终局为 `null` |
+| `log` | string[] | 战斗日志——**直接逐行显示，不要解析** |
+
+### 1.2 双方公开块（对称）
+
+真实样例（截取自 pve 开局，`player` 侧）：
+
+```json
+{
+  "name": "战士", "max_hp": 32, "hp": 32, "shield": 0, "energy": 3,
+  "hero": { "key": "warrior", "name": "战士", "max_hp": 32,
+            "skill_name": "守护", "skill_type": "shield", "skill_value": 7 },
+  "skill": { "name": "守护", "type": "shield", "value": 7, "cost": 2,
+             "used_this_turn": false },
+  "equipment": { "weapon": null, "armor": null },
+  "bonus_energy_next_turn": 0,
+  "exhaust_pile": [],
+  "negate_available": true,
+  "hand": [ { "id": "card-12e26751", "key": "heal", "name": "治疗", "cost": 2,
+              "effect_type": "heal", "value": 6, "exhaust": false,
+              "text": "恢复 6 点生命值" } ]
+}
+```
+
+要点：
+
+- **`equipment.weapon` / `armor`**：值是**完整卡牌定义**（含 `text`）或 `null`；键恒在；
+- **`exhaust_pile`**：**元素是 card key 字符串**（如 `["execute"]`），显示中文名用 `/api/cards` 映射；
+- **`negate_available`**：反制机会是否还在（双方都看得见，见 §6）；
+- **`hand` 只出现在 `viewer` 自己一侧**：对面**根本没有这个键**（不是空数组）——双人交接屏的第三道保险；
+- **`enemy.intent`**：只有**人机模式的玩家回合**非 `null`（`{kind, source, name, value, text}` 五键），其余时刻恒为 `null`——`null` 时隐藏面板，不要显示过期预告。
+
+### 1.3 `response`（响应窗口）
+
+```json
+// 平时（没有挂起）
+{ "active": false, "kind": null, "attacker": null,
+  "card_name": null, "damage": 0, "dodge_cost": 1 }
+
+// 挂起的攻击事件
+{ "active": true, "kind": "attack", "attacker": "enemy",
+  "card_name": "重击", "damage": 10, "dodge_cost": 1 }
+
+// 挂起的出牌事件（可被反制）
+{ "active": true, "kind": "play", "attacker": "enemy",
+  "card_name": "蓄力", "damage": 0, "dodge_cost": 1 }
+```
+
+- **`active` 是"该我响应吗"**：攻击方视角下为 `false`，但依然能读到 `attacker / card_name / damage`——可显示"等待对手响应…"；
+- **`kind` 决定弹什么面板**（见 §5）。
+
+### 1.4 `available_actions`
+
+```json
+{ "play_card": true, "use_skill": true, "end_turn": true,
+  "respond": { "dodge": false, "negate": false, "pass": false } }
+```
+
+全部是"**这份状态 viewer 现在能做什么**"：非 viewer 回合时前三项为 `false`（双人交接屏可据此让操作区只读）。
+
+---
+
+## 2. 开始页 / 选人页
+
+### 2.1 模式选择（两个主选项）
+
+- **人机对战**：`POST /api/game` `{ "hero_key": "warrior", "ai_difficulty": "hard" }`（`mode` 省略即 `pve`）
+- **双人对战**：先收集两个英雄（流程见 §7.1），再 `POST /api/game` `{ "mode": "pvp", "hero_key": "warrior", "opponent_hero_key": "mage" }`
+
+两者成功都是 **201**，`data` 就是首屏状态（直接渲染）。
+
+### 2.2 选人页数据（P4）
+
+`GET /api/heroes` → 每项都是完整条目：
+
+```json
+{ "key": "warrior", "name": "战士", "max_hp": 32,
+  "skill_name": "守护", "skill_type": "shield", "skill_value": 7,
+  "description": "牌多血厚，靠护盾和治疗把对局拖长",
+  "deck": [ { "key": "slash", "name": "斩击", "count": 6 } ] }
+```
+
+`description` 与 `deck`（首次出现顺序的汇总）**直接展示**，不要自己写英雄介绍。
+
+---
+
+## 3. 对局页渲染清单（对照 P0–P5）
+
+| 计划 | 元素 | 读字段 | 样例 / 边界 |
+|---|---|---|---|
+| P0 | 能量圆点 | `player.energy` / `enemy.energy` | **动态渲染**，至少支持 `0–5`（蓄力+连招能到 5）；不要固定 3 个 |
+| P0 | 下回合 +N | `.bonus_energy_next_turn` | `0` 时隐藏；蓄力打出后出现、自己回合开始后消失 |
+| P1 | 装备槽 ×4 | `.equipment.weapon` / `.armor` | 值是完整卡牌定义或 `null`；空槽留低存在感轮廓 |
+| P2 | 敌人意图 | `enemy.intent` | 五键都在；`null` 时隐藏；标签用 `kind`（6 值 + `null`） |
+| P3 | 卡牌类型标签 | `effect_type` | 攻击 / 防御 / 治疗 / 响应 / 装备 / 蓄力——**别把装备和蓄力写成"辅助"** |
+| P3 | 消耗标记 | `exhaust` | `true` 时加标记；处决正文只读 `text` |
+| P3 | 移除计数 | `.exhaust_pile` | 是 key 数组；`[]` 时隐藏计数 |
+| P4 | 结果页 | `result.{winner, reason, text}` | **直接显示 `text`**；非终局 `null` 走兜底 |
+| — | 反制徽标 | `.negate_available` | 双方头部各一个（§6） |
+| P5 | 头像 | `hero.key` | 按 key 映射素材，缺图用兜底 |
+
+**牌面文字一律用 `text`**（手牌、装备槽、`/api/cards` 都有）——不自己拼数字。
+
+---
+
+## 4. 操作请求（三类）
+
+| 动作 | 请求 | 说明 |
+|---|---|---|
+| 出牌 | `POST /api/game/actions/card` `{ "card_id": "card-xxxx" }` | `card_id` 是**手牌里的 `id`**，不是 `key` |
+| 技能 | `POST /api/game/actions/skill` | 空 body 即可 |
+| 结束回合 | `POST /api/game/actions/end-turn` | 空 body 即可 |
+| 响应 | `POST /api/game/actions/respond` `{ "action": "dodge" }` | action ∈ `dodge` / `negate` / `pass`（§5） |
+
+- 成功 200、`data` 是最新状态；**规则拒绝 422**（`data` 同样带最新状态——直接重渲染 + 提示 `error.message` 即可）；
+- **双人模式所有动作请求都要带 `seat`**（§7.2）。
+
+---
+
+## 5. 响应窗口（弹什么，看 `kind`）
+
+**触发条件**：`response.active === true`（= 该 viewer 响应）。按 `kind` 分派：
+
+| `kind` | 场景 | 面板 | 按钮可用性读 |
+|---|---|---|---|
+| `"attack"` | 你被攻击、手里有闪避 | "闪避 / 放弃" | `respond.dodge` / `respond.pass` |
+| `"play"` | 对手打出**装备或蓄力**、你反制机会还在 | "反制 / 放行" | `respond.negate` / `respond.pass` |
+| `null` | 无挂起 | 关掉面板 | — |
+
+- `pass`（放弃/放行）**永远可用**（`respond.pass` 在 `active` 时恒 `true`）——两个面板都要给"放弃"一个落点；
+- 三种 action 的请求体：`{"action":"dodge"}` / `{"action":"negate"}` / `{"action":"pass"}`；
+- **攻击方视角**（`active:false` 但 `card_name` 非空）：可显示"对方正在响应…"，把操作区置灰等下一次刷新。
+
+---
+
+## 6. 反制展示（新机制）
+
+- **含义**：每局一次的场外机会；对手打装备/蓄力时花 1 点能量取消它；
+- **徽标**：双方头部各一个（读 `player.negate_available` / `enemy.negate_available`）——`true` = 还留着，`false` = 已用掉；
+- **面板**：§5 的 `kind === "play"`；
+- **约束**：机会用掉后**不会再挂起**（不会再弹面板），徽标变灰即可；不存在"反制牌"（不要往手牌里找）。
+
+---
+
+## 7. 双人热座（构建计划 P0–P5 之外的新增量）
+
+### 7.1 开局流程（三步）
+
+```text
+① 玩家1 选英雄（选人页照常）
+② 交接屏："请把设备交给玩家 2" → 玩家2 点"我准备好了"
+③ 玩家2 选英雄 → POST /api/game { "mode": "pvp", "hero_key": <玩家1>, "opponent_hero_key": <玩家2> }
+```
+
+### 7.2 对局中的三条规则
+
+1. **请求带 `seat`**：所有动作 + 响应请求都加 `"seat": "player"`（玩家1）或 `"seat": "enemy"`（玩家2）——AI 侧由后端处理，前端按"当前画面归谁"传；
+2. **取视角用 `?seat=`**：`GET /api/game?seat=enemy` 拿玩家2 的视角——**当前该谁操作就取谁的**；
+3. **交接信号**：`mode === "pvp"` 且 `phase === "ENEMY_TURN"` → 显示交接屏，等玩家2 确认后 `GET ?seat=enemy` 刷新（**不要复用旧 DOM**）。
+
+### 7.3 交接态长什么样（真实样例）
+
+```json
+// 玩家1 视角（已经不能操作）
+{ "phase": "ENEMY_TURN", "mode": "pvp", "viewer": "player",
+  "available_actions": { "play_card": false, "use_skill": false,
+                         "end_turn": false, "respond": { "dodge": false, "negate": false, "pass": false } } }
+
+// 玩家2 视角（可以操作）
+{ "phase": "ENEMY_TURN", "mode": "pvp", "viewer": "enemy",
+  "available_actions": { "play_card": true, "use_skill": true, "end_turn": true } }
+```
+
+- **手牌隔离是数据层的**：玩家1 视角里 `enemy` 块**没有 `hand` 键**，反之亦然——交接屏之外，"扣置"其实不用前端做（数据本来就没给对面手牌）；
+- 日志/结果文案在双人下是中性的"玩家1/玩家2"——**不要改**，直接用。
+
+---
+
+## 8. 一局流程的请求样例全集（可照抄）
+
+```text
+# 人机
+POST /api/game                          { "hero_key": "warrior", "ai_difficulty": "hard" }
+POST /api/game/actions/card             { "card_id": "card-xxxx" }
+POST /api/game/actions/respond          { "action": "dodge" }          # response.active 时
+POST /api/game/actions/end-turn         {}
+POST /api/game/restart                  {}                              # 结果页重开
+
+# 双人（从玩家1 开始）
+POST /api/game                          { "mode": "pvp", "hero_key": "warrior", "opponent_hero_key": "mage" }
+POST /api/game/actions/card             { "seat": "player", "card_id": "card-xxxx" }
+POST /api/game/actions/end-turn         { "seat": "player" }           # 响应 phase = ENEMY_TURN → 交接屏
+GET  /api/game?seat=enemy                                               # 玩家2 视角
+POST /api/game/actions/respond          { "seat": "player", "action": "negate" }   # 玩家1 反制玩家2 的蓄力
+POST /api/game/actions/end-turn         { "seat": "enemy" }            # 交回玩家1
+```
+
+---
+
+## 9. 坑清单
+
+1. **`hand` 缺失 ≠ 空数组**：对面一侧真的没有这个键——用 `state.enemy.hand` 前先想清楚"这是谁的视角"；
+2. **别缓存状态做乐观更新**：一切以回包为准（422 也回完整状态）；
+3. **`dodge_cost` 恒为 1、`damage` 为 `0`** 不表示"没有挂起"——判断挂起看 `kind` / `card_name` 是否 `null`；
+4. **`exhaust_pile` 是 key 数组**，不是卡牌对象——要中文名先 join `/api/cards`；
+5. **反制不是牌**：手牌里永远没有"反制"；它是 `negate_available` 这个布尔资源；
+6. **交接刷新**必须重新 `GET`，不要同屏切 DOM——否则玩家2 看到的是玩家1 的旧手牌；
+7. **未知枚举要降级**：`effect_type` / `intent.kind` / `response.kind` 未来可能加成员（契约允许加法），`switch` 记得留 `default`；
+8. **结果页用 `result.text`**，`winner`/`reason` 只用来决定配色（如胜负红蓝），别自己拼句子。
+
+---
+
+## 10. 前端自测清单（做完逐条打勾）
+
+- [ ] 蓄力打出后：能量 -1、"+2" 标签出现；下回合开始 +2、标签消失（P0）
+- [ ] 长剑/铁甲打出后，同一次回包内出现在对应槽位；空槽不塌陷（P1）
+- [ ] 玩家回合能看到意图；进入响应/终局后消失（P2）
+- [ ] 处决打出后：手牌消失、移除计数 +1、不落在弃牌堆或装备槽（P3）
+- [ ] 结果页四种 `reason` 文案都对（kill/hp/shield/draw）（P4）
+- [ ] **攻击响应**：`kind=attack` 弹闪避面板；点放弃伤害照常落地
+- [ ] **反制响应**：`kind=play` 弹反制面板；点反制后对手装备没进槽 / 蓄力没回能，徽标变灰
+- [ ] **双人**：交接屏出现时机正确；玩家2 视角看不到玩家1 手牌；交回玩家1 后状态正确刷新
+- [ ] 双人日志里没有任何"你 / 电脑"字样
