@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, session
 from game.battle import PVE_MODE, PVP_MODE, BattleState
 from game.catalog import CARDS, HEROES
 from game.models import AIDifficulty, BattlePhase, Side
+from game.online_battle_service import OnlineBattleService, hash_seat_token
 from game.public_state import (
     card_to_dict,
     hero_catalog_entry,
@@ -13,8 +14,37 @@ from game.public_state import (
 from game.session_state import clear_battle, load_battle
 from web_support import RESULT_SAVED_KEY, persist_battle
 
+# 座位凭证原文只存在这个 Session 键里，按 room_id 分桶；它随签名 Cookie 往返，
+# 前端 JavaScript 既不读取也不拼接。数据库只保存它的 sha256 摘要。
+TOKEN_SESSION_KEY = "online_tokens"
 
-def create_api_blueprint() -> Blueprint:
+_RESPOND_ACTIONS = frozenset({"dodge", "negate", "pass"})
+
+# 契约 §6.1 的错误码 → HTTP 状态；服务层只给机器码，由路由决定状态码与是否带快照。
+ROOM_ERROR_STATUS = {
+    "INVALID_REQUEST": 400,
+    "ROOM_AUTH_REQUIRED": 401,
+    "ROOM_FORBIDDEN": 403,
+    "ROOM_NOT_FOUND": 404,
+    "ALREADY_IN_ROOM": 409,
+    "ROOM_NOT_JOINABLE": 409,
+    "STALE_STATE": 409,
+    "ROOM_STATE_CONFLICT": 409,
+    "ROOM_EXPIRED": 410,
+    "INVALID_NICKNAME": 422,
+    "INVALID_HERO": 422,
+    "HERO_ALREADY_LOCKED": 422,
+    "REMATCH_ALREADY_CONFIRMED": 422,
+    "ACTION_REJECTED": 422,
+}
+
+
+def _is_revision(value: object) -> bool:
+    """revision 必须是真正的非负整数；布尔是 int 的子类，但语义上不是版本号。"""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def create_api_blueprint(online_service: OnlineBattleService | None = None) -> Blueprint:
     api = Blueprint("api", __name__, url_prefix="/api")
 
     def response(data=None, *, status=200, error=None):
@@ -26,6 +56,12 @@ def create_api_blueprint() -> Blueprint:
             status=status,
             error={"code": code, "message": message},
         )
+
+    @api.after_request
+    def disable_caching(response_object):
+        # 任何响应都可能带私有手牌或房间快照，禁止浏览器与代理缓存（契约 §2.1）。
+        response_object.headers["Cache-Control"] = "no-store"
+        return response_object
 
     def current_battle():
         battle = load_battle(session)
@@ -212,5 +248,202 @@ def create_api_blueprint() -> Blueprint:
         clear_battle(session)
         session.pop(RESULT_SAVED_KEY, None)
         return response(None)
+
+    # ------------------------------------------------------------------
+    # 在线 PvP（接口契约 v1）
+    # ------------------------------------------------------------------
+
+    def stored_tokens() -> dict:
+        tokens = session.get(TOKEN_SESSION_KEY)
+        return tokens if isinstance(tokens, dict) else {}
+
+    def stored_raw_token(room_id: object) -> str | None:
+        """按 room_id 取本浏览器的座位凭证原文；没有则返回 None 走未授权分支。"""
+        if not isinstance(room_id, str):
+            return None
+        token = stored_tokens().get(room_id)
+        return token if isinstance(token, str) else None
+
+    def remember_token(room_id: object, raw_token: str | None) -> None:
+        if not isinstance(room_id, str) or not raw_token:
+            return
+        tokens = dict(stored_tokens())
+        tokens[room_id] = raw_token
+        session[TOKEN_SESSION_KEY] = tokens
+
+    def known_token_hashes() -> list[str]:
+        """本浏览器已持有的全部凭证摘要，用于拒绝自己加入自己的房间。"""
+        return [hash_seat_token(token) for token in stored_tokens().values() if token]
+
+    def require_service():
+        if online_service is None:
+            return error_response("ROOM_NOT_FOUND", "在线房间功能未启用", status=404)
+        return None
+
+    def room_payload(required: set[str]):
+        """严格校验请求体：必须是 JSON 对象，且字段集合与契约完全一致。"""
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return None, error_response(
+                "INVALID_REQUEST", "请求体必须是 JSON 对象", status=400
+            )
+        if set(payload) - required:
+            return None, error_response(
+                "INVALID_REQUEST", "请求体包含未定义字段", status=400
+            )
+        if required - set(payload):
+            return None, error_response(
+                "INVALID_REQUEST", "请求体缺少必填字段", status=400
+            )
+        return payload, None
+
+    def revision_error():
+        return error_response("INVALID_REQUEST", "revision 必须是非负整数", status=400)
+
+    def service_failure(result):
+        code = result.code or "ROOM_STATE_CONFLICT"
+        return error_response(
+            code,
+            result.message or code,
+            status=ROOM_ERROR_STATUS.get(code, 409),
+            data=result.snapshot,
+        )
+
+    def revision_action(room_id: str, method_name: str):
+        """带 revision 的统一读写路径：鉴权、版本比较、状态检查都在服务层。"""
+        guard = require_service()
+        if guard:
+            return guard
+        payload, error = room_payload({"revision"})
+        if error:
+            return error
+        if not _is_revision(payload["revision"]):
+            return revision_error()
+        result = getattr(online_service, method_name)(
+            room_id, stored_raw_token(room_id), payload["revision"]
+        )
+        if not result.ok:
+            return service_failure(result)
+        return response(result.snapshot)
+
+    @api.post("/rooms")
+    def online_create_room():
+        guard = require_service()
+        if guard:
+            return guard
+        payload, error = room_payload({"nickname"})
+        if error:
+            return error
+        result = online_service.create_room(payload["nickname"])
+        if not result.ok:
+            return service_failure(result)
+        room = (result.snapshot or {}).get("room") or {}
+        remember_token(room.get("room_id"), result.raw_token)
+        return response(result.snapshot, status=201)
+
+    @api.post("/rooms/join")
+    def online_join_room():
+        guard = require_service()
+        if guard:
+            return guard
+        payload, error = room_payload({"room_code", "nickname"})
+        if error:
+            return error
+        result = online_service.join_room(
+            payload["room_code"],
+            payload["nickname"],
+            known_token_hashes=known_token_hashes(),
+        )
+        if not result.ok:
+            return service_failure(result)
+        room = (result.snapshot or {}).get("room") or {}
+        remember_token(room.get("room_id"), result.raw_token)
+        return response(result.snapshot)
+
+    @api.get("/rooms/<room_id>")
+    def online_get_room(room_id: str):
+        guard = require_service()
+        if guard:
+            return guard
+        result = online_service.get_room_state(room_id, stored_raw_token(room_id))
+        if not result.ok:
+            return service_failure(result)
+        return response(result.snapshot)
+
+    @api.post("/rooms/<room_id>/hero")
+    def online_lock_hero(room_id: str):
+        guard = require_service()
+        if guard:
+            return guard
+        payload, error = room_payload({"hero_key", "revision"})
+        if error:
+            return error
+        if not _is_revision(payload["revision"]):
+            return revision_error()
+        result = online_service.lock_hero(
+            room_id,
+            stored_raw_token(room_id),
+            payload["hero_key"],
+            payload["revision"],
+        )
+        if not result.ok:
+            return service_failure(result)
+        return response(result.snapshot)
+
+    @api.post("/rooms/<room_id>/actions/card")
+    def online_play_card(room_id: str):
+        guard = require_service()
+        if guard:
+            return guard
+        payload, error = room_payload({"card_id", "revision"})
+        if error:
+            return error
+        if not _is_revision(payload["revision"]):
+            return revision_error()
+        result = online_service.play_card(
+            room_id,
+            stored_raw_token(room_id),
+            payload["card_id"],
+            payload["revision"],
+        )
+        if not result.ok:
+            return service_failure(result)
+        return response(result.snapshot)
+
+    @api.post("/rooms/<room_id>/actions/skill")
+    def online_use_skill(room_id: str):
+        return revision_action(room_id, "use_skill")
+
+    @api.post("/rooms/<room_id>/actions/end-turn")
+    def online_end_turn(room_id: str):
+        return revision_action(room_id, "end_turn")
+
+    @api.post("/rooms/<room_id>/actions/respond")
+    def online_respond(room_id: str):
+        guard = require_service()
+        if guard:
+            return guard
+        payload, error = room_payload({"action", "revision"})
+        if error:
+            return error
+        if payload["action"] not in _RESPOND_ACTIONS:
+            return error_response(
+                "INVALID_REQUEST", "响应操作必须是 dodge、negate 或 pass", status=400
+            )
+        if not _is_revision(payload["revision"]):
+            return revision_error()
+        result = online_service.respond(
+            room_id,
+            stored_raw_token(room_id),
+            payload["action"],
+            payload["revision"],
+        )
+        if not result.ok:
+            return service_failure(result)
+        return response(result.snapshot)
+
+    @api.post("/rooms/<room_id>/rematch")
+    def online_rematch(room_id: str):
+        return revision_action(room_id, "request_rematch")
 
     return api

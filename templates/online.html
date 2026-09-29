@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>在线 PvP · 卡牌对战</title>
+  <link rel="icon" href="{{ url_for('static', filename='assets/card-shield.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='online-pvp.css') }}">
+</head>
+<body>
+  <main
+    class="online-shell"
+    id="online-shell"
+    data-initial-room-code="{{ initial_room_code }}"
+  >
+    <header class="online-header">
+      <div>
+        <span class="eyebrow">CARD BATTLE MVP</span>
+        <h1>在线 PvP</h1>
+        <p>两台设备、一个房间，基于同一份服务端战斗状态进行回合制对战。</p>
+      </div>
+      <a class="text-link" href="/demo">打开人机联调页</a>
+    </header>
+
+    <section class="online-card lobby-view" id="lobby-view">
+      <div class="entry-grid">
+        <article class="entry-card entry-card-primary">
+          <span class="entry-number">01</span>
+          <h2>创建双人房间</h2>
+          <p>创建者获得房间码和邀请链接，等待另一位玩家加入。</p>
+          <form id="create-room-form" class="room-form">
+            <label for="create-nickname">你的昵称</label>
+            <input id="create-nickname" name="nickname" maxlength="12" autocomplete="nickname" placeholder="例如：小王" required>
+            <button class="primary-button" type="submit">创建房间</button>
+          </form>
+        </article>
+
+        <article class="entry-card">
+          <span class="entry-number">02</span>
+          <h2>加入双人房间</h2>
+          <p>输入朋友分享的房间码，或直接打开邀请链接。</p>
+          <form id="join-room-form" class="room-form">
+            <label for="join-room-code">房间码</label>
+            <input id="join-room-code" name="room_code" maxlength="12" autocomplete="off" placeholder="例如：K7P4WQ" required>
+            <label for="join-nickname">你的昵称</label>
+            <input id="join-nickname" name="nickname" maxlength="12" autocomplete="nickname" placeholder="例如：小李" required>
+            <button class="secondary-button" type="submit">加入房间</button>
+          </form>
+        </article>
+      </div>
+      <p class="online-message" id="lobby-message" role="status"></p>
+    </section>
+
+    <section class="room-view is-hidden" id="room-view" aria-live="polite">
+      <header class="room-header online-card">
+        <div>
+          <span class="eyebrow" id="room-status-label">ROOM</span>
+          <h2 id="room-title">房间</h2>
+          <p id="room-subtitle">正在读取房间状态…</p>
+        </div>
+        <div class="room-meta">
+          <div>
+            <span>房间码</span>
+            <strong id="room-code">--</strong>
+          </div>
+          <button class="copy-button" id="copy-invite" type="button">复制邀请链接</button>
+        </div>
+      </header>
+
+      <section class="room-panel online-card is-hidden" id="waiting-panel">
+        <div class="panel-icon">WAIT</div>
+        <div>
+          <span class="eyebrow">WAITING FOR OPPONENT</span>
+          <h2>等待对手加入</h2>
+          <p>把下面的链接或房间码发给另一位玩家。房间状态会自动刷新。</p>
+          <div class="invite-row">
+            <input id="invite-link" type="text" readonly aria-label="邀请链接">
+            <button class="secondary-button" id="copy-invite-inline" type="button">复制</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="room-panel online-card is-hidden" id="hero-select-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">BLIND HERO SELECT</span>
+            <h2>选择你的英雄</h2>
+            <p>双方锁定前，只显示对方是否已选择，不公开对方英雄。</p>
+          </div>
+          <div class="player-readiness" id="hero-readiness"></div>
+        </div>
+        <div class="hero-options" id="hero-options"></div>
+        <div class="hero-select-footer">
+          <span id="hero-selection-message">请选择一个英雄。</span>
+          <button class="primary-button" id="lock-hero-button" type="button" disabled>锁定英雄</button>
+        </div>
+      </section>
+
+      <section class="room-panel battle-panel online-card is-hidden" id="battle-panel">
+        <div class="battle-heading">
+          <div>
+            <span class="eyebrow">MATCH <span id="match-number">1</span></span>
+            <h2 id="battle-phase">等待战斗状态</h2>
+            <p id="battle-hint">正在读取服务端状态…</p>
+          </div>
+          <div class="revision-badge">同步版本 <strong id="revision-number">0</strong></div>
+        </div>
+
+        <div class="online-battle-grid">
+          <article class="combatant-card opponent-card">
+            <div class="combatant-topline"><span class="eyebrow">OPPONENT</span><strong id="opponent-name">--</strong></div>
+            <div class="combatant-hero-line"><img id="opponent-portrait" src="/static/assets/enemy-portrait.png" alt="对手英雄"><span id="opponent-hero">--</span></div>
+            <div class="stat-row"><span>生命 <strong id="opponent-hp">--</strong></span><span>护盾 <strong id="opponent-shield">0</strong></span><span>能量 <strong id="opponent-energy">0</strong></span></div>
+            <div class="health-track"><span id="opponent-health-fill"></span></div>
+            <p class="combatant-detail" id="opponent-skill">技能待用</p>
+          </article>
+
+          <section class="battle-center">
+            <div class="response-box is-hidden" id="response-panel">
+              <span class="eyebrow">RESPONSE WINDOW</span>
+              <h3 id="response-prompt">等待响应</h3>
+              <p id="response-hint">请根据服务端提供的操作进行选择。</p>
+              <div class="response-actions" id="response-actions">
+                <button class="primary-button" id="respond-dodge" type="button">闪避</button>
+                <button class="secondary-button" id="respond-negate" type="button">反制</button>
+                <button class="quiet-button" id="respond-pass" type="button">放弃响应</button>
+              </div>
+            </div>
+            <div class="battle-log-box">
+              <div class="section-heading"><h3>战斗日志</h3><span>RECENT</span></div>
+              <ol id="battle-log" class="battle-log"><li>等待战斗开始…</li></ol>
+            </div>
+          </section>
+
+          <article class="combatant-card self-card">
+            <div class="combatant-topline"><span class="eyebrow">YOU</span><strong id="self-name">--</strong></div>
+            <div class="combatant-hero-line"><img id="self-portrait" src="/static/assets/warrior-portrait.png" alt="你的英雄"><span id="self-hero">--</span></div>
+            <div class="stat-row"><span>生命 <strong id="self-hp">--</strong></span><span>护盾 <strong id="self-shield">0</strong></span><span>能量 <strong id="self-energy">0</strong></span></div>
+            <div class="health-track"><span id="self-health-fill"></span></div>
+            <p class="combatant-detail" id="self-skill">技能待用</p>
+          </article>
+        </div>
+
+        <div class="action-row">
+          <button class="action-button" id="use-skill" type="button">使用技能</button>
+          <button class="action-button action-button-primary" id="end-turn" type="button">结束回合</button>
+        </div>
+        <div class="hand-heading"><div><span class="eyebrow">YOUR HAND</span><h3>只显示自己的手牌</h3></div><span id="hand-count">0 / 6</span></div>
+        <div class="online-hand" id="online-hand"></div>
+      </section>
+
+      <section class="room-panel online-card result-panel is-hidden" id="finished-panel">
+        <span class="eyebrow">MATCH RESULT</span>
+        <h2 id="result-title">战斗结束</h2>
+        <p id="result-copy"></p>
+        <p class="result-meta" id="result-meta"></p>
+        <p class="online-message" id="rematch-message"></p>
+        <button class="primary-button" id="rematch-button" type="button">确认再来一局</button>
+      </section>
+
+      <section class="room-panel online-card is-hidden" id="expired-panel">
+        <span class="eyebrow">ROOM EXPIRED</span>
+        <h2>房间已过期</h2>
+        <p>这个房间已经不能继续加入或操作，请创建一个新房间。</p>
+        <button class="secondary-button" id="new-room-button" type="button">创建新房间</button>
+      </section>
+
+      <p class="online-toast" id="online-toast" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='online-pvp.js') }}" defer></script>
+</body>
+</html>

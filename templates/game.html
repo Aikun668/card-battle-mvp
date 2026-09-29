@@ -12,7 +12,7 @@
 <main class="game-shell" id="game-shell" data-has-game="{{ 'true' if has_battle else 'false' }}">
   <header class="opponent-zone">
     <div class="portrait-frame opponent-portrait">
-      <img src="{{ url_for('static', filename='assets/enemy-portrait.png') }}" alt="电脑对手">
+      <img id="enemy-portrait" src="{{ url_for('static', filename='assets/enemy-portrait.png') }}" alt="电脑对手">
     </div>
     <div class="combatant-summary">
       <div class="name-line">
@@ -28,11 +28,28 @@
         <span>护盾 <b id="enemy-shield">0</b></span>
         <span class="energy-label">能量 <b id="enemy-energy">0</b></span>
         <span class="energy-pips" id="enemy-energy-pips" aria-label="电脑能量"></span>
+        <span class="bonus-energy is-hidden" id="enemy-bonus-energy"></span>
+        <span class="exhaust-count is-hidden" id="enemy-exhaust-count"></span>
         <span class="skill-state" id="enemy-skill">技能待用</span>
       </div>
+      <div class="equipment-slots" id="enemy-equipment" aria-label="电脑装备">
+        <div class="equipment-slot is-empty" id="enemy-weapon-slot" data-slot="weapon">
+          <span class="equipment-slot-label">武器</span>
+          <div class="equipment-slot-body"><span class="equipment-slot-status">未装备</span></div>
+        </div>
+        <div class="equipment-slot is-empty" id="enemy-armor-slot" data-slot="armor">
+          <span class="equipment-slot-label">护甲</span>
+          <div class="equipment-slot-body"><span class="equipment-slot-status">未装备</span></div>
+        </div>
+      </div>
     </div>
-    <div class="deck-hint" aria-hidden="true">
-      <span></span><span></span><span></span>
+    <div class="enemy-intent is-hidden" id="enemy-intent" aria-hidden="true" aria-live="polite">
+      <div class="enemy-intent-heading">
+        <span class="eyebrow">ENEMY INTENT</span>
+        <span class="enemy-intent-kind" id="enemy-intent-kind">预计行动</span>
+      </div>
+      <strong class="enemy-intent-name" id="enemy-intent-name">--</strong>
+      <p class="enemy-intent-text" id="enemy-intent-text"></p>
     </div>
   </header>
 
@@ -74,6 +91,7 @@
             <div class="selected-card-name-line">
               <strong id="selected-card-name">等待选择</strong>
               <span id="selected-card-type">--</span>
+              <span class="selected-card-exhaust is-hidden" id="selected-card-exhaust">消耗</span>
             </div>
             <small id="selected-card-effect">将鼠标移到手牌上查看效果。</small>
             <small class="selected-card-status" id="selected-card-status">等待本回合开始</small>
@@ -85,7 +103,7 @@
 
   <section class="player-zone">
     <div class="portrait-frame player-portrait">
-      <img src="{{ url_for('static', filename='assets/warrior-portrait.png') }}" alt="玩家角色">
+      <img id="player-portrait" src="{{ url_for('static', filename='assets/warrior-portrait.png') }}" alt="玩家角色">
     </div>
     <div class="combatant-summary player-summary">
       <div class="name-line">
@@ -100,6 +118,18 @@
         <span>护盾 <b id="player-shield">0</b></span>
         <span class="energy-label">能量 <b id="player-energy">0</b></span>
         <span class="energy-pips" id="player-energy-pips" aria-label="能量"></span>
+        <span class="bonus-energy is-hidden" id="player-bonus-energy"></span>
+        <span class="exhaust-count is-hidden" id="player-exhaust-count"></span>
+      </div>
+      <div class="equipment-slots" id="player-equipment" aria-label="玩家装备">
+        <div class="equipment-slot is-empty" id="player-weapon-slot" data-slot="weapon">
+          <span class="equipment-slot-label">武器</span>
+          <div class="equipment-slot-body"><span class="equipment-slot-status">未装备</span></div>
+        </div>
+        <div class="equipment-slot is-empty" id="player-armor-slot" data-slot="armor">
+          <span class="equipment-slot-label">护甲</span>
+          <div class="equipment-slot-body"><span class="equipment-slot-status">未装备</span></div>
+        </div>
       </div>
     </div>
     <div class="player-actions">
@@ -128,21 +158,56 @@
   </section>
 
   <section class="screen-overlay" id="start-overlay" aria-modal="true" role="dialog">
-    <div class="overlay-panel">
+    <div class="overlay-panel hero-selection-panel">
       <span class="eyebrow">CARD BATTLE MVP</span>
       <h2>选择你的角色</h2>
-      <p>每回合 3 点能量，在攻击、防守和治疗之间做出决定。</p>
-      <div class="hero-options" id="hero-options"></div>
-      <div class="difficulty-picker">
-        <span class="eyebrow">电脑难度</span>
-        <div class="difficulty-options" id="difficulty-options" role="radiogroup" aria-label="电脑难度">
+      <div class="mode-picker">
+        <span class="eyebrow">游戏模式</span>
+        <div class="mode-options" id="mode-options" role="radiogroup" aria-label="游戏模式">
+          <button class="mode-option is-selected" type="button" data-mode="pve" aria-pressed="true">人机对战<small>挑战电脑 AI</small></button>
+          <button class="mode-option" type="button" data-mode="pvp" aria-pressed="false">双人热座<small>同设备轮流操作</small></button>
+        </div>
+      </div>
+      <div class="hero-selection" id="player1-hero-selection">
+        <span class="eyebrow" id="player1-label">玩家 1</span>
+        <div class="hero-options" id="hero-options"></div>
+        <div class="hero-card-preview" id="hero-card-preview" aria-label="玩家 1 卡牌预览">
+          <button class="hero-card-nav" id="hero-card-prev" type="button" aria-label="查看上一组卡牌">‹</button>
+          <div class="hero-card-track" id="hero-card-track"></div>
+          <button class="hero-card-nav" id="hero-card-next" type="button" aria-label="查看下一组卡牌">›</button>
+        </div>
+      </div>
+      <div class="hero-selection is-hidden" id="player2-hero-selection">
+        <span class="eyebrow">玩家 2</span>
+        <div class="hero-options" id="hero-options-2"></div>
+        <div class="hero-card-preview" id="hero-card-preview-2" aria-label="玩家 2 卡牌预览">
+          <button class="hero-card-nav" id="hero-card-prev-2" type="button" aria-label="查看上一组卡牌">‹</button>
+          <div class="hero-card-track" id="hero-card-track-2"></div>
+          <button class="hero-card-nav" id="hero-card-next-2" type="button" aria-label="查看下一组卡牌">›</button>
+        </div>
+      </div>
+      <div class="difficulty-picker" id="difficulty-picker">
+        <button class="difficulty-toggle" id="difficulty-toggle" type="button" aria-expanded="false" aria-controls="difficulty-options">
+          <span class="difficulty-toggle-label">电脑难度</span>
+          <strong id="difficulty-summary">中等（默认难度）</strong>
+          <span class="difficulty-toggle-icon" aria-hidden="true">⌄</span>
+        </button>
+        <div class="difficulty-options" id="difficulty-options" role="radiogroup" aria-label="电脑难度" aria-hidden="true">
           <button class="difficulty-option" type="button" data-difficulty="easy" aria-pressed="false">简单<small>选牌更随意</small></button>
           <button class="difficulty-option is-selected" type="button" data-difficulty="medium" aria-pressed="true">中等<small>默认难度</small></button>
           <button class="difficulty-option" type="button" data-difficulty="hard" aria-pressed="false">困难<small>会预判斩杀</small></button>
         </div>
-        <p class="difficulty-note">三档难度使用完全相同的卡牌数值、生命值与能量规则。</p>
       </div>
       <button class="primary-action" id="start-game" type="button" disabled>开始战斗</button>
+    </div>
+  </section>
+
+  <section class="screen-overlay is-hidden" id="handoff-overlay" aria-modal="true" role="dialog">
+    <div class="overlay-panel handoff-panel">
+      <span class="eyebrow">PASS THE DEVICE</span>
+      <h2 id="handoff-title">轮到玩家 2</h2>
+      <p id="handoff-copy">请把设备交给玩家 2，确认后继续。</p>
+      <button class="primary-action" id="handoff-confirm" type="button">我已就位</button>
     </div>
   </section>
 
@@ -150,6 +215,7 @@
     <div class="overlay-panel result-panel">
       <span class="eyebrow">BATTLE RESULT</span>
       <h2 id="result-title">战斗结束</h2>
+      <span class="result-reason is-hidden" id="result-reason"></span>
       <p id="result-copy"></p>
       <button class="primary-action" id="restart-game" type="button">再来一局</button>
     </div>

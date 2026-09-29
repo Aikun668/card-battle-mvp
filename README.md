@@ -2,7 +2,7 @@
 
 这是一个以 Python 为主的轻量级网页卡牌对战游戏项目。
 
-当前阶段已经完成后端 MVP 和 JSON 接口。现有 HTML 页面只保留为 `/demo` 临时联调入口，正式前端后续由插件构建。完整需求见 [docs/mvp.md](docs/mvp.md)，玩法和交互规则见 [docs/interaction-design.md](docs/interaction-design.md)，接口约定见 [docs/api-contract.md](docs/api-contract.md)。代码实施步骤见 [实现计划](docs/superpowers/plans/2026-09-18-card-battle-mvp.md)，验收与质量门槛见 [验收文档](docs/claude-builder/acceptance.md)，外部 Claude Code 执行交接见 [Claude Code 交接](docs/claude-builder/claude-code-handoff.md)。
+当前阶段已经完成后端 MVP 和 JSON 接口。现有 HTML 页面只保留为 `/demo` 临时联调入口，正式前端后续由插件构建。正式产品入口按“人机对战 / 创建双人房间 / 加入双人房间”规划；当前代码中的 `/api/game` 继续服务人机与已冻结的旧热座兼容模式，在线房间按独立的架构、执行方案和接口契约实施，尚未宣称交付。完整需求见 [docs/产品方案/基础规则/mvp.md](docs/产品方案/基础规则/mvp.md)，玩法和交互规则见 [docs/产品方案/基础规则/interaction-design.md](docs/产品方案/基础规则/interaction-design.md)，本地接口约定见 [docs/接口契约/本地对局/api-contract.md](docs/接口契约/本地对局/api-contract.md)，在线接口约定见 [docs/接口契约/在线PvP/在线PvP接口契约-v1.md](docs/接口契约/在线PvP/在线PvP接口契约-v1.md)。代码实施步骤见 [历史实施计划](docs/归档/历史实施计划/2026-09-18-card-battle-mvp.md)，验收与质量门槛见 [验收文档](docs/验收/MVP/MVP验收与质量门槛.md)，外部 Claude Code 执行交接见 [Claude Code 交接](docs/工程规范/工具交接/claude-code-handoff.md)。
 
 ## 一句话玩法
 
@@ -11,7 +11,8 @@
 ## MVP 范围
 
 - 单人对战电脑 AI：简单 / 中等 / 困难三档，只影响电脑的选牌质量，不改变数值，默认中等；
-- **本地双人热座**：同一台设备两人轮流操作，一人打一边（`mode: "pvp"`）；对手同样从英雄池选择，规则与人机模式完全一致，没有 AI 参与；
+- **在线双人对战（当前正式方向）**：创建双人房间或加入双人房间，两个浏览器通过房间和座位凭证进入同一局；完整交付以 [在线 PvP 执行方案](docs/产品方案/03-在线PvP执行方案/README.md) 和 [在线接口契约](docs/接口契约/在线PvP/在线PvP接口契约-v1.md) 为准；
+- **旧本地双人热座（已冻结）**：同一设备两人轮流操作，仅保留 `/api/game` 兼容能力，不再作为正式入口或新增玩法；
 - 3 个角色：战士、法师、游侠，双方从同一英雄池获得英雄；
 - 11 种卡牌：斩击、重击、护盾、治疗、火球，只在响应窗口使用的闪避，两张装备牌长剑和铁甲，以及三张条件牌破甲、蓄力、处决；
 - 三个英雄各持一副 16 张的专属卡组，打法差异来自卡组构成，不做抽卡、卡牌收集和卡组编辑；
@@ -84,7 +85,7 @@
 
 ## 当前不做
 
-- 多人在线对战（本地双人热座**已经提供**，见「MVP 范围」；联网、双设备、房间与观战不做）；
+- 陌生人自动匹配、观战和复杂掉线恢复（邀请房间制的在线双人对战属于当前实施方向，不在“当前不做”中否定）；
 - 登录注册；
 - 卡牌收集、稀有度和抽卡系统；
 - 排位、商城和社交功能；
@@ -111,7 +112,7 @@ pip install -r requirements.txt
 flask --app app:create_app run --debug
 ```
 
-启动后访问 `http://127.0.0.1:5000/` 查看服务信息，访问 `http://127.0.0.1:5000/demo` 打开临时联调页面。正式前端使用 `/api` 接口，具体见 [API 接口约定](docs/api-contract.md)。SQLite 数据库默认写入 `instance/card_battle.sqlite3`，首次启动时会自动建表。
+启动后访问 `http://127.0.0.1:5000/` 查看服务信息，访问 `http://127.0.0.1:5000/demo` 打开临时联调页面。正式前端使用 `/api` 接口，具体见 [API 接口约定](docs/接口契约/本地对局/api-contract.md)。SQLite 数据库默认写入 `instance/card_battle.sqlite3`，首次启动时会自动建表。
 
 如果希望隔离依赖，也可以走标准虚拟环境流程：
 
